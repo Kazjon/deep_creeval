@@ -1,0 +1,44 @@
+!obj:pylearn2.train.Train {
+    dataset: &train !obj:pylearn2.datasets.transformer_dataset.TransformerDataset {
+        raw: !obj:pylearn2.datasets.mnist.MNIST {
+            which_set: 'train',
+            start: 0,
+            stop: %(train_stop)i
+        },
+        transformer: !pkl: "%(save_path)s/cae_l1.pkl"
+    },
+    model: !obj:DUconfig.CAE {
+        nvis :  %(nvis)i,
+        nhid : %(nhid)i,
+        irange : %(irange)f,
+        tied_weights: %(tied)s,
+        act_enc: %(act_enc)s,
+        act_dec: %(act_dec)s,    # Linear activation on the decoder side.
+    },
+    algorithm: !obj:pylearn2.training_algorithms.sgd.SGD {
+        learning_rate : 1e-3,
+        batch_size : %(batch_size)i,
+        learning_rule: !obj:pylearn2.training_algorithms.learning_rule.Momentum {
+            init_momentum: 0.05,
+        },
+        monitoring_batches : %(monitoring_batches)i,
+        monitoring_dataset : &valid !obj:pylearn2.datasets.transformer_dataset.TransformerDataset {
+            raw: !obj:pylearn2.datasets.mnist.MNIST {
+                which_set: 'train',
+                start: 50000,
+                stop: 60000
+            },
+            transformer: !pkl: "%(save_path)s/cae_l1.pkl"
+        },
+        cost : !obj:pylearn2.costs.cost.SumOfCosts {
+            costs: [!obj:pylearn2.costs.autoencoder.MeanSquaredReconstructionError {},
+                    !obj:contraction.ContractiveCost {coeff: %(contract_coef)f},
+            ]
+        },
+        termination_criterion : !obj:pylearn2.termination_criteria.EpochCounter {
+            max_epochs: %(max_epochs)i,
+        },
+    },
+    save_path: "%(save_path)s/cae_l2.pkl",
+    save_freq: 1
+}
