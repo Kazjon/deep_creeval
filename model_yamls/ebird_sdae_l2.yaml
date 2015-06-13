@@ -6,7 +6,7 @@
         },
         transformers: !obj:pylearn2.cross_validation.blocks.StackedBlocksCV {
             layers: [
-                !pkl: "%(save_path)s/ebird_dae_l1.pkl",
+                !pkl: "%(save_path)s/%(layer_fn)s_l1.pkl",
             ],
         },
     },

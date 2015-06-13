@@ -22,6 +22,6 @@
             max_epochs: %(max_epochs)i,
         },
     },
-    save_path: "%(save_path)s/ebird_dae_l1.pkl",
+    save_path: "%(save_path)s/%(layer_fn)s_l1.pkl",
     save_freq: 1
 }

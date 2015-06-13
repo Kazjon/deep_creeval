@@ -48,8 +48,8 @@ def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.
 	if metadata is not None:
 		unescape_mongo(metadata)
 
-		cs = globals()[metadata['model_class']](spearmint_params['datapath'])
-		metadata['best_hypers'] =  cs.train_mongo(domain_name, metadata['fields_x'], metadata['fields_y'], metadata['query'], spearmint_params['stop_thresh'], spearmint_params['look_back'])
+		cs = globals()[metadata['model_class']](domain_name, spearmint_params['datapath'])
+		metadata['best_hypers'] =  cs.train_mongo(metadata['fields_x'], metadata['fields_y'], metadata['query'], spearmint_params['stop_thresh'], spearmint_params['look_back'])
 
 		# Save the best hypers to the database
 		if len(metadata['best_hypers'].keys()):
@@ -81,16 +81,19 @@ def train_expectations(domain_name,pretrain_start = None, pretrain_stop = None, 
 				metadata["time_slice"] = time_slice
 
 			if all(i in metadata.keys() for i in ["pretrain_start","pretrain_stop","train_stop","time_slice"]):
-				cs = globals()[metadata['model_class']](datapath,selected_hypers=metadata["best_hypers"])
+				cs = globals()[metadata['model_class']](domain_name, datapath,selected_hypers=metadata["best_hypers"])
 				# Fit the initial model
-				pretrained_model = cs.pretrain(domain_name,metadata)
-				cs.inspect(pretrained_model)
-				step_0 = {"start": metadata["pretrain_start"], "stop": metadata["pretrain_stop"], "model": deepcopy(pretrained_model)}
-				del step_0["model"]["models"] # For now let's not store the actual train objects in the db, just the file paths and whatever comes out of inspect.
+				step_0 = cs.pretrain(metadata)
+				#pickle.dump(pretrained_model,open("pretrain_test.pkl","wb"))
+				#pretrained_model = pickle.load(open("pretrain_test.pkl","rb"))
+				#print "loaded."
+				step_0["start"] = metadata["pretrain_start"]
+				step_0["stop"] =  metadata["pretrain_stop"]
 				#step_0 = "pretrain_skipped"
 				metadata['steps'] = [step_0]
-				cs.stepwise_train(domain_name,metadata)
-				#db.datasets.save(metadata)
+				cs.stepwise_train(metadata)
+				escape_mongo(metadata)
+				db.datasets.save(metadata)
 			else:
 				print "Need valid pretrain_start, pretrain_stop, time_stop and time_slice parameters to train a model."
 		else:
@@ -99,8 +102,35 @@ def train_expectations(domain_name,pretrain_start = None, pretrain_stop = None, 
 		print "Could not find a record for the dataset",domain_name,"in the database."
 
 # Measures the unexpectedness of a given saved model.
-def unexpectedness():
-	pass
+def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, train_stop = None, time_slice = None, datapath="data/"):
+	#Pull best hypers out of the database
+	client = pymongo.MongoClient()
+	db = client.creeval
+	metadata = db.datasets.find_one({"name": domain_name})
+
+	if metadata is not None:
+		#Use the previously-fit hypers to train a single model with the provided timeslices (or ones from the data)
+		unescape_mongo(metadata)
+		if "best_hypers" in metadata.keys():
+			if pretrain_start is not None:
+				metadata["pretrain_start"] = pretrain_start
+			if pretrain_stop is not None:
+				metadata["pretrain_stop"] = pretrain_stop
+			if train_stop is not None:
+				metadata["train_stop"] = train_stop
+			if time_slice is not None:
+				metadata["time_slice"] = time_slice
+
+			if all(i in metadata.keys() for i in ["pretrain_start","pretrain_stop","train_stop","time_slice"]):
+				cs = globals()[metadata['model_class']](domain_name, datapath,selected_hypers=metadata["best_hypers"])
+				# Fit the initial model
+				cs.stepwise_inspect(metadata)
+			else:
+				print "Need valid pretrain_start, pretrain_stop, time_stop and time_slice parameters to train a model."
+		else:
+			print "The database",domain_name,"does not contain fitted hyperparameters.  Run fit_hypers() on it first."
+	else:
+		print "Could not find a record for the dataset",domain_name,"in the database."
 
 def ebird_metadata_setup():
 	cat_metadata = []
@@ -144,5 +174,6 @@ if __name__ == "__main__":
 
 	#ebird_insert_timefield()
 	#ebird_metadata_setup()
-	#fit_hypers("ebird",spearmint_params = {"look_back": 5,"stop_thresh": 0.05, 'datapath': "data/ebird/hyper_fitting/"})
-	train_expectations("ebird", datapath = 'data/ebird/expectations/')
+	#fit_hypers("ebird",spearmint_params = {"look_back": 3,"stop_thresh": 0.05, 'datapath': "data/ebird/hyper_fitting/"})
+	#train_expectations("ebird", datapath = 'data/ebird/expectations2/')
+	unexpectedness("ebird", datapath = 'data/ebird/expectations2/')

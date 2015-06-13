@@ -39,6 +39,7 @@ for path in path_prefixes:
 		model = model_inspector.load_model(layerpaths_,DUconfig.costs)
 		#model = model_inspector.load_model([path+"/cae_l1.pkl"],DUconfig.costs)
 		#'''
+		#
 		model_inspector.save_as_patches(model_inspector.show_weights(model),[28,28],out_path=path+"/outpatches_l"+str(l+1)+".png")
 		encoded = model_inspector.encode(data.X,model)
 		scipy.misc.imsave(path+"/hidden_activations_l"+str(l+1)+".png",encoded)
