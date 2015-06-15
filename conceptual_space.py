@@ -51,13 +51,11 @@ def monary_load(collection, fields_x, fields_y, start=0,stop=0, find_args={}):
 	y = out[:,len(fields_x):]
 	y = (y > 0).astype(int)
 
-
-	scaler = StandardScaler().fit(X)
-	X = scaler.transform(X)
-	pickle.dump(scaler,open(collection+"_scaler.pkl","wb"))
-	y = np.asarray(y)
-
-
+	if X.shape[0]:
+		scaler = StandardScaler().fit(X)
+		X = scaler.transform(X)
+		pickle.dump(scaler,open(collection+"_scaler.pkl","wb"))
+		y = np.asarray(y)
 
 	return DenseDesignMatrix(X=X,y=y)
 
@@ -82,6 +80,8 @@ class ConceptualSpace():
 		pretrain_query['$and'].append({metadata["timefield"]: {"$gte": metadata["pretrain_start"]}})
 		pretrain_query['$and'].append({metadata["timefield"]: {"$lt": metadata["pretrain_stop"]}})
 		ddm = monary_load(self.domain_name,metadata["fields_x"],metadata["fields_y"],find_args=pretrain_query)
+		if not ddm.X.shape[0]:
+			sys.exit("Pretrain failed as no examples were found within the pretraining time window of "+str(metadata["pretrain_start"])+" to "+str(metadata["pretrain_stop"]))
 		#scaler = pickle.load(open(domain_name+"_scaler.pkl","rb"))
 		DUconfig.dataset = ddm
 		params = self.hypers
@@ -473,11 +473,11 @@ class SDAConceptualSpace(ConceptualSpace):
 					"corrupt_l1": 0.33,
 					"corrupt_l2": 0.33,
 					"corrupt_l3": 0.33,
-					"corrupt_l4": 0.0,
+					"corrupt_l4": 0.33,
 	                "n_folds": 5,
-					"nhid_l4": 3,
+					"nhid_l4": 6,
 					"sparse_coef_l4": 0,
-					"sparse_p_l4": 0
+					"sparse_p_l4": 0.1667
 	}
 
 #	spearmint_imports =  """\
@@ -550,9 +550,9 @@ class SDAConceptualSpace(ConceptualSpace):
 		pprint(alignments)
 
 	def compare_models(self, O_by_A, model1, model2, save_path=""):
-		for alpha in [0.1,1,10,100]:
+		for alpha in [1000]:
 			for m,model in enumerate([model1, model2]):
-				model["clustermodel"],model["clusterreps"],model["clusterpreds"] = self.representation_clustering_VBGMM(model["F_by_O_normed"].T,n_components=6,alpha=alpha,tol=1e-15,n_iter=100000)
+				model["clustermodel"],model["clusterreps"],model["clusterpreds"] = self.representation_clustering_VBGMM(model["F_by_O_normed"].T,n_components=6,alpha=alpha,tol=1e-18,n_iter=10000000)
 				model["clustermeans"] = []
 				model["clusterstdevs"] = []
 				model["clustererrors"] = []
@@ -565,6 +565,23 @@ class SDAConceptualSpace(ConceptualSpace):
 						members = model["E_by_O"][cl_indices]
 						model["clustererrors"].append(np.mean(members))
 
+				print model["clusterreps"][0:10,:]
+
+				plt.figure(figsize=(50,50))
+				df = pd.DataFrame(O_by_A)
+				df['class'] = model["clusterpreds"]
+				radviz(df,"class",s=1, alpha=0.5)
+				plt.savefig(os.path.join(save_path,model["name"]+"attrplot_"+str(alpha)+".png"), bbox_inches='tight')
+				plt.close("all")
+
+				plt.figure(figsize=(50,50))
+				df = pd.DataFrame(model["F_by_O_normed"].T)
+				df['class'] = model["clusterpreds"]
+				radviz(df,"class",s=1, alpha=0.5)
+				plt.savefig(os.path.join(save_path,model["name"]+"featureplot_"+str(alpha)+".png"), bbox_inches='tight')
+				plt.close("all")
+
+
 			pairs = self.alignClusterings(model2,model1) #Swapped these around because alignClustering treats the first model as the past and the second as the current.
 
 			plt.figure()
@@ -574,35 +591,6 @@ class SDAConceptualSpace(ConceptualSpace):
 			plt.savefig(os.path.join(save_path,model1["name"]+"_vs_"+model2["name"]+"_clustermeans_"+str(alpha)+".png"), bbox_inches='tight')
 			plt.close("all")
 
-			plt.figure(figsize=(50,50))
-			df = pd.DataFrame(O_by_A)
-			df['class'] = model1["clusterpreds"]
-			radviz(df,"class",s=1, alpha=0.5)
-			plt.savefig(os.path.join(save_path,model1["name"]+"attrplot_"+str(alpha)+".png"), bbox_inches='tight')
-			plt.close("all")
-
-			plt.figure(figsize=(50,50))
-			df = pd.DataFrame(O_by_A)
-			df['class'] = model2["clusterpreds"]
-			radviz(df,"class",s=1, alpha=0.5)
-			plt.savefig(os.path.join(save_path,model2["name"]+"attrplot_"+str(alpha)+".png"), bbox_inches='tight')
-			plt.close("all")
-
-			plt.figure(figsize=(50,50))
-			df = pd.DataFrame(model1["F_by_O_normed"].T)
-			df['class'] = model1["clusterpreds"]
-			radviz(df,"class",s=1, alpha=0.5)
-			plt.savefig(os.path.join(save_path,model1["name"]+"featureplot_"+str(alpha)+".png"), bbox_inches='tight')
-			plt.close("all")
-
-			plt.figure(figsize=(50,50))
-			df = pd.DataFrame(model2["F_by_O_normed"].T)
-			df['class'] = model2["clusterpreds"]
-			radviz(df,"class",s=1, alpha=0.5)
-			plt.savefig(os.path.join(save_path,model2["name"]+"featureplot_"+str(alpha)+".png"), bbox_inches='tight')
-			plt.close("all")
-
-		sys.exit()
 		'''
 			for k in Ks:
 				if k == float("inf"):
