@@ -176,4 +176,4 @@ if __name__ == "__main__":
 	#ebird_metadata_setup()
 	#fit_hypers("ebird",spearmint_params = {"look_back": 3,"stop_thresh": 0.05, 'datapath': "data/ebird/hyper_fitting/"})
 	#train_expectations("ebird", datapath = 'data/ebird/expectations_sp0_k12_drop33_tanhtanh/')
-	unexpectedness("ebird", datapath = 'data/ebird/expectations_sp10.6_k12_drop33/', sample_size=20000)
+	unexpectedness("ebird", datapath = 'data/ebird/expectations_sp10.6_k12_drop33/', sample_size=100)
