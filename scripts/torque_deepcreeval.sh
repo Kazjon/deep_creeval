@@ -34,5 +34,6 @@ SHORT_JOBID=`echo $PBS_JOBID |cut -d. -f1`
 exec 1>$PBS_O_WORKDIR/$PBS_JOBNAME-$SHORT_JOBID.out  2>$PBS_O_WORKDIR/$PBS_JOBNAME-$SHORT_JOBID.err
 
 ### run job
+./startmongo.sh
 cd deep_creeval
 python deep_creeval.py
