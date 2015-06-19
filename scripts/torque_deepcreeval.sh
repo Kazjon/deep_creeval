@@ -5,14 +5,14 @@
 ### Specify queue to run
 #PBS -q python
 ### Set the job name
-#PBS -N Kaz_Test
+#PBS -N deep_creeval
 ### Specify the # of cpus for your job.
 #PBS -l nodes=1
 ### Adjust walltime below (default walltime = 7 days, or 168 hours)
 ### if you require > 7 days, INCREASE to estimated # hours needed
 ### if you DON'T require 7 days DECREASE to estimated # hours needed
 ### (hint: jobs with smaller walltime value tend to run sooner)
-#PBS -l walltime=1:00:00
+#PBS -l walltime=168:00:00
 ### pass the full environment
 #PBS -V
 # send PBS output to /dev/null  (we redirect it below)
@@ -34,4 +34,5 @@ SHORT_JOBID=`echo $PBS_JOBID |cut -d. -f1`
 exec 1>$PBS_O_WORKDIR/$PBS_JOBNAME-$SHORT_JOBID.out  2>$PBS_O_WORKDIR/$PBS_JOBNAME-$SHORT_JOBID.err
 
 ### run job
-python theano_gputest.py
+cd deep_creeval
+python deep_creeval.py
