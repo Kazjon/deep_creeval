@@ -102,7 +102,7 @@ def train_expectations(domain_name,pretrain_start = None, pretrain_stop = None, 
 		print "Could not find a record for the dataset",domain_name,"in the database."
 
 # Measures the unexpectedness of a given saved model.
-def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, train_stop = None, time_slice = None, datapath="data/"):
+def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, train_stop = None, time_slice = None, sample_size= 50000, datapath="data/"):
 	#Pull best hypers out of the database
 	client = pymongo.MongoClient()
 	db = client.creeval
@@ -124,7 +124,7 @@ def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, trai
 			if all(i in metadata.keys() for i in ["pretrain_start","pretrain_stop","train_stop","time_slice"]):
 				cs = globals()[metadata['model_class']](domain_name, datapath,selected_hypers=metadata["best_hypers"])
 				# Fit the initial model
-				cs.stepwise_inspect(metadata)
+				cs.stepwise_inspect(metadata, sample_size=sample_size)
 			else:
 				print "Need valid pretrain_start, pretrain_stop, time_stop and time_slice parameters to train a model."
 		else:
@@ -175,5 +175,5 @@ if __name__ == "__main__":
 	#ebird_insert_timefield()
 	#ebird_metadata_setup()
 	#fit_hypers("ebird",spearmint_params = {"look_back": 3,"stop_thresh": 0.05, 'datapath': "data/ebird/hyper_fitting/"})
-	train_expectations("ebird", datapath = 'data/ebird/expectations_sp0_k6_drop33_tanhtanh/')
-	unexpectedness("ebird", datapath = 'data/ebird/expectations_sp0_k6_drop33_tanhtanh/')
+	#train_expectations("ebird", datapath = 'data/ebird/expectations_sp0_k12_drop33_tanhtanh/')
+	unexpectedness("ebird", datapath = 'data/ebird/expectations_sp0_k12_drop33_tanhtanh/', sample_size=5000)

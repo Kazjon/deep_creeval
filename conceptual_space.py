@@ -1,6 +1,7 @@
 try: import simplejson as json
 except ImportError: import json
 from sklearn.preprocessing import StandardScaler,Imputer
+from sklearn.manifold import TSNE
 from monary import Monary
 from copy import deepcopy
 
@@ -23,6 +24,8 @@ from pprint import pprint
 import pandas as pd
 from pandas.tools.plotting import radviz
 import matplotlib.pyplot as plt
+
+import bh_tsne.bhtsne as bh_tsne
 
 plt.style.use('ggplot')
 np.set_printoptions(linewidth=200)
@@ -475,7 +478,7 @@ class SDAConceptualSpace(ConceptualSpace):
 					"corrupt_l3": 0.33,
 					"corrupt_l4": 0.33,
 	                "n_folds": 5,
-					"nhid_l4": 6,
+					"nhid_l4": 12,
 					"sparse_coef_l4": 0,
 					"sparse_p_l4": 0.1667
 	}
@@ -567,14 +570,28 @@ class SDAConceptualSpace(ConceptualSpace):
 
 				print model["clusterreps"][0:10,:]
 
-				plt.figure(figsize=(50,50))
+				#tsne = TSNE(n_components=2, perplexity=30).fit_transform(model["F_by_O_normed"].T)
+				tsne = list(bh_tsne.bh_tsne(model["F_by_O_normed"].T, no_dims=2, perplexity=30))
+				plt.figure(figsize=(20,20))
+				plt.scatter(tsne[:,0],tsne[:,1], c=[float(p) for p in model["clusterpreds"]])
+				plt.savefig(os.path.join(save_path,model["name"]+"_FbyO_TSNE.png"), bbox_inches='tight')
+				plt.close("all")
+
+				#tsne = TSNE(n_components=2, perplexity=30).fit_transform(O_by_A)
+				tsne = list(bh_tsne.bh_tsne(O_by_A, no_dims=2, perplexity=30))
+				plt.figure(figsize=(20,20))
+				plt.scatter(tsne[:,0],tsne[:,1], c=[float(p) for p in model["clusterpreds"]])
+				plt.savefig(os.path.join(save_path,model["name"]+"_ObyA_TSNE.png"), bbox_inches='tight')
+				plt.close("all")
+
+				plt.figure(figsize=(20,20))
 				df = pd.DataFrame(O_by_A)
 				df['class'] = model["clusterpreds"]
 				radviz(df,"class",s=1, alpha=0.5)
 				plt.savefig(os.path.join(save_path,model["name"]+"attrplot_"+str(alpha)+".png"), bbox_inches='tight')
 				plt.close("all")
 
-				plt.figure(figsize=(50,50))
+				plt.figure(figsize=(20,20))
 				df = pd.DataFrame(model["F_by_O_normed"].T)
 				df['class'] = model["clusterpreds"]
 				radviz(df,"class",s=1, alpha=0.5)
