@@ -571,14 +571,14 @@ class SDAConceptualSpace(ConceptualSpace):
 				print model["clusterreps"][0:10,:]
 
 				#tsne = TSNE(n_components=2, perplexity=30).fit_transform(model["F_by_O_normed"].T)
-				tsne = list(bh_tsne.bh_tsne(model["F_by_O_normed"].T, no_dims=2, perplexity=30))
+				tsne = np.array(bh_tsne.bh_tsne(model["F_by_O_normed"].T, no_dims=2, perplexity=30))
 				plt.figure(figsize=(20,20))
 				plt.scatter(tsne[:,0],tsne[:,1], c=[float(p) for p in model["clusterpreds"]])
 				plt.savefig(os.path.join(save_path,model["name"]+"_FbyO_TSNE.png"), bbox_inches='tight')
 				plt.close("all")
 
 				#tsne = TSNE(n_components=2, perplexity=30).fit_transform(O_by_A)
-				tsne = list(bh_tsne.bh_tsne(O_by_A, no_dims=2, perplexity=30))
+				tsne = np.array(bh_tsne.bh_tsne(O_by_A, no_dims=2, perplexity=30))
 				plt.figure(figsize=(20,20))
 				plt.scatter(tsne[:,0],tsne[:,1], c=[float(p) for p in model["clusterpreds"]])
 				plt.savefig(os.path.join(save_path,model["name"]+"_ObyA_TSNE.png"), bbox_inches='tight')
