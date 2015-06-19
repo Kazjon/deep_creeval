@@ -37,3 +37,4 @@ exec 1>$PBS_O_WORKDIR/$PBS_JOBNAME-$SHORT_JOBID.out  2>$PBS_O_WORKDIR/$PBS_JOBNA
 ./startmongo.sh
 cd deep_creeval
 python deep_creeval.py
+kill -9 `pidof mongod`
