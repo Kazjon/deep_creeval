@@ -33,6 +33,43 @@ np.set_printoptions(linewidth=200)
 
 from networkx.utils import reverse_cuthill_mckee_ordering
 
+from scipy.spatial.distance import squareform
+from sklearn.manifold import _utils
+from sklearn.metrics.pairwise import pairwise_distances
+
+
+MACHINE_EPSILON = np.finfo(np.double).eps
+
+def _joint_probabilities(distances, desired_perplexity, verbose):
+	"""Compute joint probabilities p_ij from distances.
+
+	Parameters
+	----------
+	distances : array, shape (n_samples * (n_samples-1) / 2,)
+		Distances of samples are stored as condensed matrices, i.e.
+		we omit the diagonal and duplicate entries and store everything
+		in a one-dimensional array.
+
+	desired_perplexity : float
+		Desired perplexity of the joint probability distributions.
+
+	verbose : int
+		Verbosity level.
+
+	Returns
+	-------
+	P : array, shape (n_samples * (n_samples-1) / 2,)
+		Condensed joint probability matrix.
+	"""
+	# Compute conditional probabilities such that they approximately match
+	# the desired perplexity
+	conditional_P = _utils._binary_search_perplexity(
+		distances, desired_perplexity, verbose)
+	P = conditional_P + conditional_P.T
+	sum_P = np.maximum(np.sum(P), MACHINE_EPSILON)
+	P = np.maximum(squareform(P) / sum_P, MACHINE_EPSILON)
+	return P
+
 def monary_load(collection, fields_x, fields_y, start=0,stop=0, find_args={}):
 	print collection, fields_x,fields_y,start,stop,find_args
 	numfields = len(fields_x)+len(fields_y)
@@ -71,6 +108,7 @@ class ConceptualSpace():
 	hypers = {}
 
 	def __init__(self, domain_name, hyper_space,  fixed_hypers , scratch_path = "", selected_hypers={}):
+		import traceback ; traceback.print_stack()
 		self.domain_name = domain_name
 		self.hyper_space = hyper_space
 		self.fixed_hypers = fixed_hypers
@@ -130,6 +168,7 @@ class ConceptualSpace():
 			stop_time += metadata["time_slice"]
 
 	def stepwise_inspect(self,metadata,sample_size=50000,save_path="", resample=1):
+		import traceback ; traceback.print_stack()
 		start_time = metadata["pretrain_start"]
 		for i,step in enumerate(metadata["steps"][1:]):
 			if i > 12:
@@ -471,13 +510,13 @@ class SDAConceptualSpace(ConceptualSpace):
 					"max_epochs": 10,
 					"save_path": ".",
 					"yaml_path": "../../../../model_yamls/",
-	                "layer_fn": "sdae",
-	                "num_layers": 4,
+					"layer_fn": "sdae",
+					"num_layers": 4,
 					"corrupt_l1": 0.33,
 					"corrupt_l2": 0.33,
 					"corrupt_l3": 0.33,
 					"corrupt_l4": 0.33,
-	                "n_folds": 5,
+					"n_folds": 5,
 					"nhid_l4": 12,
 					"sparse_coef_l4": 0,
 					"sparse_p_l4": 0.1667
@@ -555,7 +594,12 @@ class SDAConceptualSpace(ConceptualSpace):
 	def compare_models(self, O_by_A, model1, model2, save_path=""):
 		for alpha in [1000]:
 			for m,model in enumerate([model1, model2]):
-				model["clustermodel"],model["clusterreps"],model["clusterpreds"] = self.representation_clustering_VBGMM(model["F_by_O_normed"].T,n_components=6,alpha=alpha,tol=1e-18,n_iter=10000000)
+				dists = pairwise_distances(model["F_by_O_normed"].T, metric='euclidean', n_jobs=-1, squared=True)
+				print dists
+				probs = _joint_probabilities(np.asfarray( dists, dtype='float' ),30,2)
+				print probs
+				sys.exit()
+				model["clustermodel"],model["clusterreps"],model["clusterpreds"] = self.representation_clustering_VBGMM(model["F_by_O_normed"].T,n_components=6,alpha=alpha,tol=1e-9,n_iter=10000000)
 				model["clustermeans"] = []
 				model["clusterstdevs"] = []
 				model["clustererrors"] = []
@@ -570,7 +614,7 @@ class SDAConceptualSpace(ConceptualSpace):
 
 				print model["clusterreps"][0:10,:]
 
-				#tsne = TSNE(n_components=2, perplexity=30).fit_transform(model["F_by_O_normed"].T)
+				tsne = TSNE(n_components=2, perplexity=30).fit_transform(model["F_by_O_normed"].T)
 				tsne = np.array(list(bh_tsne.bh_tsne(model["F_by_O_normed"].T, no_dims=2, perplexity=30)))
 				plt.figure(figsize=(20,20))
 				plt.scatter(tsne[:,0],tsne[:,1], c=[float(p) for p in model["clusterpreds"]])
@@ -599,7 +643,7 @@ class SDAConceptualSpace(ConceptualSpace):
 				plt.close("all")
 
 
-			pairs = self.alignClusterings(model2,model1) #Swapped these around because alignClustering treats the first model as the past and the second as the current.
+			#pairs = self.alignClusterings(model2,model1) #Swapped these around because alignClustering treats the first model as the past and the second as the current.
 
 			plt.figure()
 			df = pd.DataFrame(model1["clustermeans"]+model2["clustermeans"])
@@ -954,7 +998,7 @@ class SDAConceptualSpace(ConceptualSpace):
 		print objectives_by_layer
 		if logging:
 			return {"objective": objective,
-			        "training_objectives": objectives_by_layer,
+					"training_objectives": objectives_by_layer,
 					"model_files": model_files}
 					#"models": models,
 					#"training_data": data}
@@ -963,6 +1007,7 @@ class SDAConceptualSpace(ConceptualSpace):
 
 
 	def __init__(self, domain_name, scratch_path = "", selected_hypers={}):
+		import traceback ; traceback.print_stack()
 		from pylearn2.config import yaml_parse
 		self.fixed_hypers["costs"] = yaml_parse.load('cost : !obj:pylearn2.costs.cost.SumOfCosts {costs: [!obj:pylearn2.costs.autoencoder.MeanSquaredReconstructionError {}, !obj:pylearn2.costs.autoencoder.SparseActivation {coeff: 1,p: 0.15}]}')['cost']
 		ConceptualSpace.__init__(self, domain_name, self.hyper_space, self.fixed_hypers, scratch_path = scratch_path,selected_hypers=selected_hypers)
