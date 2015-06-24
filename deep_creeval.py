@@ -103,8 +103,6 @@ def train_expectations(domain_name,pretrain_start = None, pretrain_stop = None, 
 
 # Measures the unexpectedness of a given saved model.
 def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, train_stop = None, time_slice = None, sample_size= 50000, datapath="data/"):
-
-	import traceback ; traceback.print_stack()
 	#Pull best hypers out of the database
 	client = pymongo.MongoClient()
 	db = client.creeval
@@ -178,5 +176,4 @@ if __name__ == "__main__":
 	#ebird_metadata_setup()
 	#fit_hypers("ebird",spearmint_params = {"look_back": 3,"stop_thresh": 0.05, 'datapath': "data/ebird/hyper_fitting/"})
 	#train_expectations("ebird", datapath = 'data/ebird/expectations_sp0_k12_drop33_tanhtanh/')
-	import traceback ; traceback.print_stack()
 	unexpectedness("ebird", datapath = 'data/ebird/expectations_sp10.6_k12_drop33/', sample_size=5000)

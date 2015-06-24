@@ -108,7 +108,6 @@ class ConceptualSpace():
 	hypers = {}
 
 	def __init__(self, domain_name, hyper_space,  fixed_hypers , scratch_path = "", selected_hypers={}):
-		import traceback ; traceback.print_stack()
 		self.domain_name = domain_name
 		self.hyper_space = hyper_space
 		self.fixed_hypers = fixed_hypers
@@ -177,7 +176,9 @@ class ConceptualSpace():
 			print "Inspecting step "+str(i)+". "+str(start_time)+"--"+str(stop_time)+"."
 			if "error" not in step.keys():
 				#query
+				print "pre deepcopy"
 				step_query = {'$and': [deepcopy(metadata["query"])]}
+				print "post deepcopy"
 				step_query['$and'].append({metadata["timefield"]: {"$gte": start_time}})
 				#step_query['$and'].append({metadata["timefield"]: {"$gte": metadata["pretrain_start"]}})
 				step_query['$and'].append({metadata["timefield"]: {"$lt": stop_time}})
@@ -1007,7 +1008,6 @@ class SDAConceptualSpace(ConceptualSpace):
 
 
 	def __init__(self, domain_name, scratch_path = "", selected_hypers={}):
-		import traceback ; traceback.print_stack()
 		from pylearn2.config import yaml_parse
 		self.fixed_hypers["costs"] = yaml_parse.load('cost : !obj:pylearn2.costs.cost.SumOfCosts {costs: [!obj:pylearn2.costs.autoencoder.MeanSquaredReconstructionError {}, !obj:pylearn2.costs.autoencoder.SparseActivation {coeff: 1,p: 0.15}]}')['cost']
 		ConceptualSpace.__init__(self, domain_name, self.hyper_space, self.fixed_hypers, scratch_path = scratch_path,selected_hypers=selected_hypers)
