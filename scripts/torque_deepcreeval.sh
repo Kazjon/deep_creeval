@@ -7,7 +7,7 @@
 ### Set the job name
 #PBS -N deep_creeval
 ### Specify the # of cpus for your job.
-#PBS -l nodes=1
+#PBS -l nodes=1:ppn=4:gpus=1
 ### Adjust walltime below (default walltime = 7 days, or 168 hours)
 ### if you require > 7 days, INCREASE to estimated # hours needed
 ### if you DON'T require 7 days DECREASE to estimated # hours needed

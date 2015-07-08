@@ -5,7 +5,7 @@ from sklearn.manifold import TSNE
 from monary import Monary
 from copy import deepcopy
 
-import os, os.path, pprint, textwrap, csv, importlib, sys, optparse , time, inspect, DUconfig, model_inspector, scipy.misc, scipy.spatial, sklearn.mixture, matplotlib, qutip, itertools, copy
+import os, os.path, pprint, textwrap, csv, importlib, sys, optparse , time, inspect, DUconfig, model_inspector, scipy.misc, scipy.spatial, sklearn.mixture, matplotlib, qutip, itertools, copy, sklearn.preprocessing
 
 from collections import OrderedDict
 
@@ -20,6 +20,7 @@ from spearmint import main
 import numpy as np
 import cPickle as pickle
 from pprint import pprint
+import types
 
 import pandas as pd
 from pandas.tools.plotting import radviz
@@ -33,12 +34,38 @@ np.set_printoptions(linewidth=200)
 
 from networkx.utils import reverse_cuthill_mckee_ordering
 
+from scipy.spatial.distance import cosine
 from scipy.spatial.distance import squareform
 from sklearn.manifold import _utils
 from sklearn.metrics.pairwise import pairwise_distances
+from sklearn.utils import validation
 
 
 MACHINE_EPSILON = np.finfo(np.double).eps
+
+iterables = (types.DictType, types.ListType, types.TupleType, types.GeneratorType)
+keepables = (types.TypeType, types.BooleanType, types.IntType, types.LongType, types.FloatType, types.ComplexType, types.StringType, types.UnicodeType)
+def sanitise_for_str_out(d):
+	if isinstance(d,types.DictType):
+		#print "iterating through dict",d
+		for k in d.keys():
+			if isinstance(d[k],iterables):
+				sanitise_for_str_out(d[k])
+				#print "recursing to k:",k,"v:",d[k]
+			elif not isinstance(d[k],keepables):
+				del d[k]
+				#print "deleted k:",k,"v:",d[k]
+		#print "... kept",d
+	elif isinstance(d,(types.ListType,types.TupleType,types.GeneratorType)):
+		#print "iterating through",d
+		for k,i in enumerate(d):
+			if isinstance(i,iterables):
+				sanitise_for_str_out(i)
+				#print "recursing to item",i
+			elif not isinstance(i,keepables):
+				del d[k]
+				#print "deleted item:",i
+		#print "... kept",d
 
 def _joint_probabilities(distances, desired_perplexity, verbose):
 	"""Compute joint probabilities p_ij from distances.
@@ -167,7 +194,6 @@ class ConceptualSpace():
 			stop_time += metadata["time_slice"]
 
 	def stepwise_inspect(self,metadata,sample_size=50000,save_path="", resample=1):
-		import traceback ; traceback.print_stack()
 		start_time = metadata["pretrain_start"]
 		for i,step in enumerate(metadata["steps"][1:]):
 			if i > 12:
@@ -228,8 +254,6 @@ class ConceptualSpace():
 				print "   --- Error: "+step["error"]
 
 
-
-
 	def predict(self, record):
 		raise NotImplementedError
 
@@ -256,7 +280,6 @@ class ConceptualSpace():
 		self.fixed_hypers["_mongo"] = {"collection": self.domain_name, "fields_x": fields_x, "fields_y": fields_y, "query": query}
 		self._train(threshold,look_back)
 		return self.hypers
-
 
 
 	def train_csv(self, data, threshold = 0.01, look_back = 3):
@@ -316,6 +339,8 @@ class ConceptualSpace():
 	def gen_model_script(self, spearmintRun, fname, spearmintImports = ""):
 		experiment_dir = os.path.abspath(os.path.join(self.scratch_path,fname))
 		with open(experiment_dir+"/"+fname+".py", "w") as f:
+			sanitised_fixed_hypers = deepcopy(self.fixed_hypers) # This gets rid of objects that seem to get left in the hypers -- particularly a Costs object.
+			sanitise_for_str_out(sanitised_fixed_hypers)
 			f.write(spearmintImports+"\nimport numpy as np\nimport sys\nsys.path.append('..')\nfrom conceptual_space import monary_load\nimport DUconfig\nfrom monary import Monary\n\n")
 			f.write(spearmintRun+"\n")
 			f.write(textwrap.dedent("""\
@@ -347,7 +372,7 @@ class ConceptualSpace():
 					hypers = fixed_params
 					hypers.update(asciiparams)
 					return run(data, hypers)
-			""".format(str(self.fixed_hypers), experiment_dir+"/data.csv")))
+			""".format(str(sanitised_fixed_hypers), experiment_dir+"/data.csv")))
 
 	def run_spearmint(self, name, threshold = 1e-1, look_back=1):
 		options, expt_dir = self.get_options([os.path.abspath(os.path.join(self.scratch_path,name))])
@@ -593,13 +618,10 @@ class SDAConceptualSpace(ConceptualSpace):
 		pprint(alignments)
 
 	def compare_models(self, O_by_A, model1, model2, save_path=""):
+		ObyA_tsne = np.array(list(bh_tsne.bh_tsne(O_by_A, no_dims=2, perplexity=30)))
 		for alpha in [1000]:
 			for m,model in enumerate([model1, model2]):
-				dists = pairwise_distances(model["F_by_O_normed"].T, metric='euclidean', n_jobs=-1, squared=True)
-				print dists
-				probs = _joint_probabilities(np.asfarray( dists, dtype='float' ),30,2)
-				print probs
-				sys.exit()
+				model["tsne_joint_probs"] = squareform(_joint_probabilities(pairwise_distances(validation.check_array(model["F_by_O_normed"].T, accept_sparse=['csr', 'csc', 'coo'], dtype=np.float64), metric='euclidean', n_jobs=1, squared=True),30,2))
 				model["clustermodel"],model["clusterreps"],model["clusterpreds"] = self.representation_clustering_VBGMM(model["F_by_O_normed"].T,n_components=6,alpha=alpha,tol=1e-9,n_iter=10000000)
 				model["clustermeans"] = []
 				model["clusterstdevs"] = []
@@ -614,21 +636,20 @@ class SDAConceptualSpace(ConceptualSpace):
 						model["clustererrors"].append(np.mean(members))
 
 				print model["clusterreps"][0:10,:]
-
-				tsne = TSNE(n_components=2, perplexity=30).fit_transform(model["F_by_O_normed"].T)
-				tsne = np.array(list(bh_tsne.bh_tsne(model["F_by_O_normed"].T, no_dims=2, perplexity=30)))
+				#tsne = TSNE(n_components=2, perplexity=30).fit_transform(model["F_by_O_normed"].T)
+				model["tsne"] = np.array(list(bh_tsne.bh_tsne(model["F_by_O_normed"].T, no_dims=2, perplexity=30)))
 				plt.figure(figsize=(20,20))
-				plt.scatter(tsne[:,0],tsne[:,1], c=[float(p) for p in model["clusterpreds"]])
+				plt.scatter(model["tsne"][:,0],model["tsne"][:,1], c=[float(p) for p in model["clusterpreds"]])
 				plt.savefig(os.path.join(save_path,model["name"]+"_FbyO_TSNE.png"), bbox_inches='tight')
 				plt.close("all")
 
 				#tsne = TSNE(n_components=2, perplexity=30).fit_transform(O_by_A)
-				tsne = np.array(list(bh_tsne.bh_tsne(O_by_A, no_dims=2, perplexity=30)))
 				plt.figure(figsize=(20,20))
-				plt.scatter(tsne[:,0],tsne[:,1], c=[float(p) for p in model["clusterpreds"]])
+				plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=[float(p) for p in model["clusterpreds"]])
 				plt.savefig(os.path.join(save_path,model["name"]+"_ObyA_TSNE.png"), bbox_inches='tight')
 				plt.close("all")
 
+				'''
 				plt.figure(figsize=(20,20))
 				df = pd.DataFrame(O_by_A)
 				df['class'] = model["clusterpreds"]
@@ -642,17 +663,79 @@ class SDAConceptualSpace(ConceptualSpace):
 				radviz(df,"class",s=1, alpha=0.5)
 				plt.savefig(os.path.join(save_path,model["name"]+"featureplot_"+str(alpha)+".png"), bbox_inches='tight')
 				plt.close("all")
+				'''
 
 
 			#pairs = self.alignClusterings(model2,model1) #Swapped these around because alignClustering treats the first model as the past and the second as the current.
 
+			'''
 			plt.figure()
 			df = pd.DataFrame(model1["clustermeans"]+model2["clustermeans"])
 			df['class'] = [0]*len(model1["clustermeans"]) + [1]*len(model2["clustermeans"])
 			radviz(df,"class")
 			plt.savefig(os.path.join(save_path,model1["name"]+"_vs_"+model2["name"]+"_clustermeans_"+str(alpha)+".png"), bbox_inches='tight')
 			plt.close("all")
+			'''
+			basesize = 10
+			modsize = 100
 
+			#probdiffs = np.absolute(model1["tsne_joint_probs"] - model2["tsne_joint_probs"])
+			probdiffs = [cosine(u,v) for (u,v) in zip(model1["tsne_joint_probs"], model2["tsne_joint_probs"])]
+			probdiffs = sklearn.preprocessing.MinMaxScaler().fit_transform(probdiffs)
+			probdiffs = np.sqrt(probdiffs)
+			cosdiffs = [cosine(u,v) for (u,v) in zip(model1["F_by_O_normed"].T, model2["F_by_O_normed"].T)]
+			cosdiffs = sklearn.preprocessing.MinMaxScaler().fit_transform(cosdiffs)
+			cosdiffs = np.sqrt(cosdiffs)
+
+			for model in [model1,model2]:
+				plt.figure(figsize=(20,20))
+				df = pd.DataFrame(O_by_A)
+				df['class'] = model["clusterpreds"]
+				radviz(df,"class",s=[(basesize+(modsize*p))/10. for p in probdiffs], alpha=0.5)
+				plt.savefig(os.path.join(save_path,model["name"]+"attrplot_probdiffs_"+str(alpha)+".png"), bbox_inches='tight')
+				plt.close("all")
+				plt.figure(figsize=(20,20))
+				radviz(df,"class",s=[(basesize+(modsize*p))/10. for p in cosdiffs], alpha=0.5)
+				plt.savefig(os.path.join(save_path,model["name"]+"attrplot_cosdiffs_"+str(alpha)+".png"), bbox_inches='tight')
+				plt.close("all")
+
+				plt.figure(figsize=(20,20))
+				df = pd.DataFrame(model["F_by_O_normed"].T)
+				df['class'] = model["clusterpreds"]
+				radviz(df,"class",s=[(basesize+(modsize*p))/10. for p in probdiffs], alpha=0.5)
+				plt.savefig(os.path.join(save_path,model["name"]+"featureplot_probdiffs_"+str(alpha)+".png"), bbox_inches='tight')
+				plt.close("all")
+				plt.figure(figsize=(20,20))
+				radviz(df,"class",s=[(basesize+(modsize*p))/10. for p in cosdiffs], alpha=0.5)
+				plt.savefig(os.path.join(save_path,model["name"]+"featureplot_cosdiffs_"+str(alpha)+".png"), bbox_inches='tight')
+				plt.close("all")
+
+			plt.figure(figsize=(20,20))
+			plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=probdiffs, cmap="copper", s=[basesize+(modsize*p) for p in probdiffs])
+ 			plt.savefig(os.path.join(save_path,"ObyA_TSNE_probdiffs.png"), bbox_inches='tight')
+			plt.close("all")
+			plt.figure(figsize=(20,20))
+			plt.scatter(model1["tsne"][:,0],model1["tsne"][:,1], c=probdiffs, cmap="copper", s=[basesize+(modsize*p) for p in probdiffs])
+			plt.savefig(os.path.join(save_path,model1["name"]+"_FbyO_TSNE_probdiffs.png"), bbox_inches='tight')
+			plt.close("all")
+			plt.figure(figsize=(20,20))
+			plt.scatter(model2["tsne"][:,0],model2["tsne"][:,1], c=probdiffs, cmap="copper", s=[basesize+(modsize*p) for p in probdiffs])
+			plt.savefig(os.path.join(save_path,model2["name"]+"_FbyO_TSNE_probdiffs.png"), bbox_inches='tight')
+			plt.close("all")
+			plt.figure(figsize=(20,20))
+			plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=cosdiffs, cmap="copper", s=[basesize+(modsize*p) for p in cosdiffs])
+ 			plt.savefig(os.path.join(save_path,"ObyA_TSNE_cosdiffs.png"), bbox_inches='tight')
+			plt.close("all")
+			plt.figure(figsize=(20,20))
+			plt.scatter(model1["tsne"][:,0],model1["tsne"][:,1], c=cosdiffs, cmap="copper", s=[basesize+(modsize*p) for p in cosdiffs])
+			plt.savefig(os.path.join(save_path,model1["name"]+"_FbyO_TSNE_cosdiffs.png"), bbox_inches='tight')
+			plt.close("all")
+			plt.figure(figsize=(20,20))
+			plt.scatter(model2["tsne"][:,0],model2["tsne"][:,1], c=cosdiffs, cmap="copper", s=[basesize+(modsize*p) for p in cosdiffs])
+			plt.savefig(os.path.join(save_path,model2["name"]+"_FbyO_TSNE_cosdiffs.png"), bbox_inches='tight')
+			plt.close("all")
+
+		#sys.exit()
 		'''
 			for k in Ks:
 				if k == float("inf"):
@@ -1011,6 +1094,14 @@ class SDAConceptualSpace(ConceptualSpace):
 		from pylearn2.config import yaml_parse
 		self.fixed_hypers["costs"] = yaml_parse.load('cost : !obj:pylearn2.costs.cost.SumOfCosts {costs: [!obj:pylearn2.costs.autoencoder.MeanSquaredReconstructionError {}, !obj:pylearn2.costs.autoencoder.SparseActivation {coeff: 1,p: 0.15}]}')['cost']
 		ConceptualSpace.__init__(self, domain_name, self.hyper_space, self.fixed_hypers, scratch_path = scratch_path,selected_hypers=selected_hypers)
+
+def LSTMConceptualSpace(ConceptualSpace):
+	fixed_hypers = {}
+	hyper_space = {}
+
+	def __init__(self, domain_name, scratch_path = "", selected_hypers={}):
+		ConceptualSpace.__init__(self, domain_name, self.hyper_space, self.fixed_hypers, scratch_path = scratch_path,selected_hypers=selected_hypers)
+
 
 if __name__ == "__main__":
 	cs = SDAConceptualSpace("data/")

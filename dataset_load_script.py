@@ -44,7 +44,7 @@ if __name__ == "__main__":
 					row[k] = vf
 			for ignore in args.ignore.split():
 				del row[ignore]
-			print row
+ 			print row
 			#print unicode(row,'utf-8',errors='ignore')
 			#row['name'] = unicode(row['name'],'utf-8',errors='ignore')
 			data.insert(row)
