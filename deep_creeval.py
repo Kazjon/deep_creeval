@@ -38,7 +38,7 @@ def unescape_mongo(metadata):
 
 
 # Runs spearmint on a given domain and saves the best hypers for future use
-def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.05, 'datapath': "data/"}, hypers_to_file=True):
+def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.05, 'datapath': "data/"}, hypers_to_file=True, override_query = {}, drop_fields = []):
 
 	spearmint_params["datapath"] = os.path.join(spearmint_params["datapath"],"hyper_fitting")
 
@@ -51,7 +51,10 @@ def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.
 		unescape_mongo(metadata)
 
 		cs = globals()[metadata['model_class']](domain_name, spearmint_params['datapath'])
-		metadata['best_hypers'] =  cs.train_mongo(metadata['fields_x'], metadata['fields_y'], metadata['query'], spearmint_params['stop_thresh'], spearmint_params['look_back'])
+		q = metadata["query"]
+		if len(override_query.keys()):
+			q = override_query
+		metadata['best_hypers'] =  cs.train_mongo([f for f in metadata['fields_x'] if f not in drop_fields],[f for f in metadata['fields_y'] if f not in drop_fields], q, spearmint_params['stop_thresh'], spearmint_params['look_back'])
 
 		# Save the best hypers to the database
 		if len(metadata['best_hypers'].keys()):
@@ -66,7 +69,7 @@ def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.
 		print "Could not find a record for the dataset",domain_name,"in the database."
 
 # Builds the deep learning model over each timeslice of the data, saving successive states to the database
-def train_expectations(domain_name,pretrain_start = None, pretrain_stop = None, train_stop = None, time_slice = None, datapath="data/", hypers_from_file=True, steps_to_file=True):
+def train_expectations(domain_name,pretrain_start = None, pretrain_stop = None, train_stop = None, time_slice = None, datapath="data/", hypers_from_file=True, steps_to_file=True, override_query = {}):
 	#Pull best hypers out of the database
 	client = pymongo.MongoClient()
 	db = client.creeval
@@ -91,7 +94,7 @@ def train_expectations(domain_name,pretrain_start = None, pretrain_stop = None, 
 			if all(i in metadata.keys() for i in ["pretrain_start","pretrain_stop","train_stop","time_slice"]):
 				cs = globals()[metadata['model_class']](domain_name, datapath,selected_hypers=metadata["best_hypers"])
 				# Fit the initial model
-				step_0 = cs.pretrain(metadata)
+				step_0 = cs.pretrain(metadata, override_query)
 				#pickle.dump(pretrained_model,open("pretrain_test.pkl","wb"))
 				#pretrained_model = pickle.load(open("pretrain_test.pkl","rb"))
 				#print "loaded."
@@ -99,7 +102,7 @@ def train_expectations(domain_name,pretrain_start = None, pretrain_stop = None, 
 				step_0["stop"] =  metadata["pretrain_stop"]
 				#step_0 = "pretrain_skipped"
 				metadata['steps'] = [step_0]
-				cs.stepwise_train(metadata)
+				cs.stepwise_train(metadata, override_query)
 
 				if steps_to_file:
 					with open(os.path.join(datapath,"steps.txt")) as f:
@@ -114,7 +117,7 @@ def train_expectations(domain_name,pretrain_start = None, pretrain_stop = None, 
 		print "Could not find a record for the dataset",domain_name,"in the database."
 
 # Measures the unexpectedness of a given saved model.
-def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, train_stop = None, time_slice = None, sample_size= 50000, datapath="data/", steps_from_file=True):
+def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, train_stop = None, time_slice = None, sample_size= 50000, datapath="data/", steps_from_file=True, override_query = {}):
 	#Pull best hypers out of the database
 	client = pymongo.MongoClient()
 	db = client.creeval
@@ -136,7 +139,7 @@ def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, trai
 			if all(i in metadata.keys() for i in ["pretrain_start","pretrain_stop","train_stop","time_slice"]):
 				cs = globals()[metadata['model_class']](domain_name, datapath,selected_hypers=metadata["best_hypers"])
 				# Fit the initial model
-				cs.stepwise_inspect(metadata, sample_size=sample_size)
+				cs.stepwise_inspect(metadata, override_query, sample_size=sample_size)
 			else:
 				print "Need valid pretrain_start, pretrain_stop, time_stop and time_slice parameters to train a model."
 		else:
@@ -145,7 +148,17 @@ def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, trai
 		print "Could not find a record for the dataset",domain_name,"in the database."
 
 if __name__ == "__main__":
+	#ten_species = ['Zenaida_macroura', 'Corvus_brachyrhynchos', 'Cardinalis_cardinalis', 'Turdus_migratorius', 'Cyanocitta_cristata', 'Spinus_tristis', 'Sturnus_vulgaris', 'Melospiza_melodia', 'Agelaius_phoeniceus', 'Picoides_pubescens']
 	collname = "ebird_top10_2008_2012"
-	fit_hypers(collname,spearmint_params = {"look_back": 1,"stop_thresh": 0.1, 'datapath': os.path.join("data/",collname)})
+	ignore_fields = ["LATITUDE","LONGITUDE",'Zenaida_macroura', 'Corvus_brachyrhynchos', 'Cardinalis_cardinalis', 'Cyanocitta_cristata', 'Spinus_tristis', 'Sturnus_vulgaris', 'Melospiza_melodia', 'Agelaius_phoeniceus', 'Picoides_pubescens']
+
+	species = ['Turdus_migratorius']
+	query = {}
+	for s in species:
+		query[s] = {"$gt": 0}
+	override_query = {}
+	override_query["$or"] = [{k:query[k]} for k in query.keys()]
+
+	fit_hypers(collname,spearmint_params = {"look_back": 1,"stop_thresh": 0.1, 'datapath': os.path.join("data/",collname)},override_query=override_query, drop_fields = ignore_fields)
 	#train_expectations(collname, datapath = 'data/ebird/expectations_sp0_k12_drop33_tanhtanh/')
 	#unexpectedness(collname, datapath = 'data/ebird/expectations_sp10.6_k12_drop33/', sample_size=10000)

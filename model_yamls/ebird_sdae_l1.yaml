@@ -4,7 +4,7 @@
         n_folds: %(n_folds)i
     },
     model: !obj:pylearn2.models.autoencoder.DenoisingAutoencoder {
-        nvis : 90,
+        nvis : %(nvis)i,
         nhid : %(nhid)i,
         irange : 0.05,
         corruptor: !obj:pylearn2.corruption.BinomialCorruptor {

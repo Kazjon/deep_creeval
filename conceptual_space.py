@@ -97,8 +97,14 @@ def _joint_probabilities(distances, desired_perplexity, verbose):
 	P = np.maximum(squareform(P) / sum_P, MACHINE_EPSILON)
 	return P
 
-def monary_load(collection, fields_x, fields_y, start=0,stop=0, find_args={}):
-	print collection, fields_x,fields_y,start,stop,find_args
+def monary_load(collection, fields_x, fields_y, start=0, stop=0, find_args={}):
+	print "Loading from MongoDB via monary with:"
+	print "  - collection:",collection
+	print "  - fields_x:",fields_x
+	print "  - fields_y:",fields_y,
+	print "  - start:",start
+	print "  - stop:",stop
+	print "  - find_args:",find_args
 	numfields = len(fields_x)+len(fields_y)
 	with Monary("127.0.0.1") as monary:
 		out = monary.query(
@@ -124,6 +130,7 @@ def monary_load(collection, fields_x, fields_y, start=0,stop=0, find_args={}):
 		pickle.dump(scaler,open(collection+"_scaler.pkl","wb"))
 		y = np.asarray(y)
 
+	print "Retrieved and scaled",X.shape[0],"datapoints."
 	return DenseDesignMatrix(X=X,y=y)
 
 class ConceptualSpace():
@@ -136,14 +143,18 @@ class ConceptualSpace():
 
 	def __init__(self, domain_name, hyper_space,  fixed_hypers , scratch_path = "", selected_hypers={}):
 		self.domain_name = domain_name
+		self.short_domain_name = domain_name.split("_")[0]
 		self.hyper_space = hyper_space
 		self.fixed_hypers = fixed_hypers
 		self.scratch_path = scratch_path
 		self.hypers = copy.deepcopy(selected_hypers)
-		self.fixed_hypers["layer_fn"] = domain_name+"_"+self.fixed_hypers["layer_fn"]
+		self.fixed_hypers["layer_fn"] = self.short_domain_name+"_"+self.fixed_hypers["layer_fn"]
 
-	def pretrain(self,metadata):
-		pretrain_query = {'$and': [deepcopy(metadata["query"])]}
+	def pretrain(self,metadata, override_query):
+		q = metadata["query"]
+		if len(override_query.keys()):
+			q = override_query
+		pretrain_query = {'$and': [deepcopy(q)]}
 		pretrain_query['$and'].append({metadata["timefield"]: {"$gte": metadata["pretrain_start"]}})
 		pretrain_query['$and'].append({metadata["timefield"]: {"$lt": metadata["pretrain_stop"]}})
 		ddm = monary_load(self.domain_name,metadata["fields_x"],metadata["fields_y"],find_args=pretrain_query)
@@ -162,13 +173,18 @@ class ConceptualSpace():
 		#pprint(result)
 		return result
 
-	def stepwise_train(self,metadata):
+	def stepwise_train(self,metadata, override_query):
 		#metadata["time_slice"] = 1 # Debug measure to speed shit up.
 		start_time = metadata["pretrain_stop"]
 		stop_time = metadata["pretrain_stop"] + metadata["time_slice"]
+
+		if len(override_query.keys()):
+			q = override_query
+		else:
+			q = deepcopy(metadata["query"])
 		while stop_time < metadata["train_stop"]:
 			#query
-			step_query = {'$and': [deepcopy(metadata["query"])]}
+			step_query = {'$and': [q]}
 			step_query['$and'].append({metadata["timefield"]: {"$gte": start_time}})
 			step_query['$and'].append({metadata["timefield"]: {"$lt": stop_time}})
 
@@ -193,8 +209,12 @@ class ConceptualSpace():
 			start_time = stop_time
 			stop_time += metadata["time_slice"]
 
-	def stepwise_inspect(self,metadata,sample_size=50000,save_path="", resample=1):
+	def stepwise_inspect(self,metadata,override_query, sample_size=50000,save_path="", resample=1, ):
 		start_time = metadata["pretrain_start"]
+		if len(override_query.keys()):
+			q = override_query
+		else:
+			q = deepcopy(metadata["query"])
 		for i,step in enumerate(metadata["steps"][1:]):
 			if i > 12:
 				sys.exit()
@@ -203,7 +223,7 @@ class ConceptualSpace():
 			if "error" not in step.keys():
 				#query
 				print "pre deepcopy"
-				step_query = {'$and': [deepcopy(metadata["query"])]}
+				step_query = {'$and': [q]}
 				print "post deepcopy"
 				step_query['$and'].append({metadata["timefield"]: {"$gte": start_time}})
 				#step_query['$and'].append({metadata["timefield"]: {"$gte": metadata["pretrain_start"]}})
@@ -1056,6 +1076,8 @@ class SDAConceptualSpace(ConceptualSpace):
 								'layer_fn': hypers["layer_fn"]}
 			if layer_num > 1:
 				layer_hypers["nvis"] = hypers["nhid_l"+str(layer_num-1)]
+			else:
+				layer_hypers["nvis"] = data.X.shape[1]
 			layer_yaml = layer_yaml % (layer_hypers)
 			print "-----LAYER_"+str(layer_num)+"-----"
 			print layer_yaml
@@ -1067,17 +1089,42 @@ class SDAConceptualSpace(ConceptualSpace):
 				train.model.monitor = Monitor(train.model)
 			train.main_loop()
 
+
 			if 'model' in dir(train):
 				obj = train.model.monitor.channels['objective'].val_record[-1] #This is a single Train object with no k-fold CV happening.
 				objectives_by_layer.append([float(i) for i in train.model.monitor.channels['objective'].val_record])
 			else:
 				obj = np.mean([i.model.monitor.channels['test_objective'].val_record[-1] for i in train.trainers]) #This is a TrainCV object that's doing k-fold CV.
-				objectives_by_layer.append([float(j) for j in np.mean([i.model.monitor.channels['test_objective'].val_record for i in train.trainers])])
-			print obj
+				objectives_by_layer.append([float(j) for j in np.mean([i.model.monitor.channels['test_objective'].val_record for i in train.trainers],axis=0)])
+			print "obj:",obj
+			print "objectives_by_layer:",objectives_by_layer[-1]
 			objectives.append(obj)
 			models.append(train)
 			model_files.append(layer_hypers['save_path']+hypers["layer_fn"]+"_l"+str(layer_num)+".pkl")
 
+		''' IN PROGRESS CODE FOR DEEP COST TRACKING -- NEEDS MODEL RECONSTRUCTION???
+		# Function for calculating the deep reconstruction error -- AE cost only does per-layer error.  This should probably go somewhere else.
+		def deep_recon(data,model,batch_size):
+			results = []
+			for batch in np.array_split(data,max(1,data.shape[0]/batch_size)):
+				result = []
+				for layer in range(len(model['layers'])):
+					d = np.atleast_2d(batch)
+					print cost(d)
+					for l in range(layer):
+						d = model['encoders'][l](d)
+					for l in reversed(range(layer)):
+						d = model['decoders'][l](d)
+					result.append(model.algorithm.cost.expr(d))
+				results.append(result)
+			return np.mean(np.vstack(results))
+
+		batch_size = 1000
+		if 'model' in dir(train):
+			deep_recon_errpr = deep_recon(data.X,train.model,batch_size)
+		else:
+			deep_recon_error = np.mean([deep_recon(data.X,i.model,batch_size) for i in train.trainers])
+		'''
 		objective = float(np.sum(objectives))
 		print objectives_by_layer
 		if logging:
