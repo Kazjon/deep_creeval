@@ -38,7 +38,7 @@ def unescape_mongo(metadata):
 
 
 # Runs spearmint on a given domain and saves the best hypers for future use
-def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.05, 'datapath': "data/"}, hypers_to_file=True, override_query = {}, drop_fields = []):
+def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.05, 'datapath': "data/"}, hypers_to_file=True, override_query = {}, drop_fields = [], sample_limit = 0):
 
 	spearmint_params["datapath"] = os.path.join(spearmint_params["datapath"],"hyper_fitting")
 
@@ -54,7 +54,7 @@ def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.
 		q = metadata["query"]
 		if len(override_query.keys()):
 			q = override_query
-		metadata['best_hypers'] =  cs.train_mongo([f for f in metadata['fields_x'] if f not in drop_fields],[f for f in metadata['fields_y'] if f not in drop_fields], q, spearmint_params['stop_thresh'], spearmint_params['look_back'])
+		metadata['best_hypers'] =  cs.train_mongo([f for f in metadata['fields_x'] if f not in drop_fields],[f for f in metadata['fields_y'] if f not in drop_fields], q, spearmint_params['stop_thresh'], spearmint_params['look_back'], sample_limit=sample_limit)
 
 		# Save the best hypers to the database
 		if len(metadata['best_hypers'].keys()):
@@ -159,6 +159,6 @@ if __name__ == "__main__":
 	override_query = {}
 	override_query["$or"] = [{k:query[k]} for k in query.keys()]
 
-	fit_hypers(collname,spearmint_params = {"look_back": 1,"stop_thresh": 0.1, 'datapath': os.path.join("data/",collname)},override_query=override_query, drop_fields = ignore_fields)
+	fit_hypers(collname,spearmint_params = {"look_back": 1,"stop_thresh": 0.1, 'datapath': os.path.join("data/",collname)},override_query=override_query, drop_fields = ignore_fields, sample_limit=1000)
 	#train_expectations(collname, datapath = 'data/ebird/expectations_sp0_k12_drop33_tanhtanh/')
 	#unexpectedness(collname, datapath = 'data/ebird/expectations_sp10.6_k12_drop33/', sample_size=10000)

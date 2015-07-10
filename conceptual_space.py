@@ -292,13 +292,13 @@ class ConceptualSpace():
 	def compare_models(self, O_by_A, model1, model2,save_path=""):
 		raise NotImplementedError
 
-	def train_mongo(self, fields_x, fields_y, query, threshold = 0.01, look_back = 3):
+	def train_mongo(self, fields_x, fields_y, query, threshold = 0.01, look_back = 3, sample_limit = 0):
 		name = self.__class__.__name__+str(id(self))
 		expdir = os.path.abspath(os.path.join(self.scratch_path,name))+"/"
 		if not os.path.exists(expdir):
 			os.makedirs(expdir)
 		self.fixed_hypers["_mongo"] = {"collection": self.domain_name, "fields_x": fields_x, "fields_y": fields_y, "query": query}
-		self._train(threshold,look_back)
+		self._train(threshold,look_back, sample_limit=sample_limit)
 		return self.hypers
 
 
@@ -310,13 +310,13 @@ class ConceptualSpace():
 		self.write_data(data, expdir)
 		self._train(threshold,look_back)
 
-	def _train(self, threshold, look_back):
+	def _train(self, threshold, look_back, sample_limit = 0):
 		name = self.__class__.__name__+str(id(self))
 		self.gen_spearmint_template(self.hyper_space, name)
 		#self.gen_model_script(textwrap.dedent(self.spearmint_imports), textwrap.dedent(self.spearmint_run), name)
 		run_source = inspect.getsourcelines(self.run)[0]
 		run_source[0] = run_source[0].replace("self,","") #The written copy of the method is in a class, but the spearmint version is static.
-		self.gen_model_script(textwrap.dedent("".join(run_source)), name, spearmintImports=self.spearmint_imports)
+		self.gen_model_script(textwrap.dedent("".join(run_source)), name, spearmintImports=self.spearmint_imports, sample_limit = sample_limit)
 		self.run_spearmint(name, threshold=threshold, look_back=look_back)
 
 	def write_data(self,data, name):
@@ -356,7 +356,7 @@ class ConceptualSpace():
 		with open(os.path.join(expdir,'config.json'), "w") as f:
 			f.writelines(json.dumps(data, indent=4))
 
-	def gen_model_script(self, spearmintRun, fname, spearmintImports = ""):
+	def gen_model_script(self, spearmintRun, fname, spearmintImports = "", sample_limit = 0):
 		experiment_dir = os.path.abspath(os.path.join(self.scratch_path,fname))
 		with open(experiment_dir+"/"+fname+".py", "w") as f:
 			sanitised_fixed_hypers = deepcopy(self.fixed_hypers) # This gets rid of objects that seem to get left in the hypers -- particularly a Costs object.
@@ -385,14 +385,14 @@ class ConceptualSpace():
 					if os.path.exists('{1}'):
 						data = np.genfromtxt('{1}',delimiter=',')
 					else:
-						data = monary_load(fixed_params['_mongo']['collection'], fixed_params['_mongo']['fields_x'], fixed_params['_mongo']['fields_y'], find_args=fixed_params['_mongo']['query'])
+						data = monary_load(fixed_params['_mongo']['collection'], fixed_params['_mongo']['fields_x'], fixed_params['_mongo']['fields_y'], find_args=fixed_params['_mongo']['query'], stop={2})
 						DUconfig.dataset = data
 						fixed_params["train_stop"] = data.X.shape[0]
 						#fixed_params["yaml_path"] = fixed_params["yaml_path"] + fixed_params['_mongo']['collection'] + "_"
 					hypers = fixed_params
 					hypers.update(asciiparams)
 					return run(data, hypers)
-			""".format(str(sanitised_fixed_hypers), experiment_dir+"/data.csv")))
+			""".format(str(sanitised_fixed_hypers), experiment_dir+"/data.csv",sample_limit)))
 
 	def run_spearmint(self, name, threshold = 1e-1, look_back=1):
 		options, expt_dir = self.get_options([os.path.abspath(os.path.join(self.scratch_path,name))])
@@ -553,7 +553,7 @@ class SDAConceptualSpace(ConceptualSpace):
 	fixed_hypers = {"train_stop": 50000,
 					"batch_size": 500,
 					"monitoring_batch_size": 500,
-					"max_epochs": 10,
+					"max_epochs": 1,
 					"save_path": ".",
 					"yaml_path": "../../../../model_yamls/",
 					"layer_fn": "sdae",
@@ -1052,13 +1052,21 @@ class SDAConceptualSpace(ConceptualSpace):
 
 	def run(self,data, hypers, logging=False, pretrained = [], cv = True):
 		from pylearn2.config import yaml_parse
+		import theano
+		from pylearn2.utils import safe_zip
+		from pylearn2.utils.data_specs import DataSpecsMapping
+
 		print hypers
 
 		objectives = []
 		objectives_by_layer = []
 		model_files = []
 		models = []
+		encoders = []
+		decoders = []
+		costs = []
 		yaml_ext = ".yaml"
+		batch_size = 100
 		if not cv:
 			yaml_ext = "_nocv"+yaml_ext
 		for layer_num in range(1,hypers['num_layers']+1):
@@ -1093,48 +1101,116 @@ class SDAConceptualSpace(ConceptualSpace):
 			if 'model' in dir(train):
 				obj = train.model.monitor.channels['objective'].val_record[-1] #This is a single Train object with no k-fold CV happening.
 				objectives_by_layer.append([float(i) for i in train.model.monitor.channels['objective'].val_record])
+				I = train.model.get_input_space().make_theano_batch(batch_size=batch_size)
+				E = train.model.encode(I)
+				encoders.append(theano.function( [I], E ))
+
+				H = train.model.get_output_space().make_theano_batch(batch_size=batch_size)
+				D = train.model.decode(H)
+				decoders.append(theano.function( [H], D ))
+
+				I2 = train.model.get_input_space().make_theano_batch(batch_size=batch_size)
+				costs.append(theano.function([I,I2], train.algorithm.cost.costs[0].cost(I,I2)))
+
+				'''
+				data_specs = train.model.algorithm.cost.get_data_specs(train.model)
+				mapping = DataSpecsMapping(data_specs)
+				space_tuple = mapping.flatten(data_specs[0], return_tuple=True)
+				source_tuple = mapping.flatten(data_specs[1], return_tuple=True)
+				# Build a flat tuple of Theano Variables, one for each space.
+				# We want that so that if the same space/source is specified
+				# more than once in data_specs, only one Theano Variable
+				# is generated for it, and the corresponding value is passed
+				# only once to the compiled Theano function.
+				theano_args = []
+				for space, source in safe_zip(space_tuple, source_tuple):
+					arg = space.make_theano_batch(batch_size=batch_size)
+					theano_args.append(arg)
+				theano_args = tuple(theano_args)
+				# Methods of `self.cost` need args to be passed in a format compatible
+				# with data_specs
+				nested_args = mapping.nest(theano_args)
+				fixed_var_descr = costs[i].get_fixed_var_descr(train.model, nested_args)
+				costs.append(theano.function([nested_args], costs[i].expr(train.model, nested_args, ** fixed_var_descr.fixed_vars)))
+				'''
 			else:
+
 				obj = np.mean([i.model.monitor.channels['test_objective'].val_record[-1] for i in train.trainers]) #This is a TrainCV object that's doing k-fold CV.
 				objectives_by_layer.append([float(j) for j in np.mean([i.model.monitor.channels['test_objective'].val_record for i in train.trainers],axis=0)])
+				enc = []
+				dec = []
+				cst = []
+				for fold in train.trainers:
+					I = fold.model.get_input_space().make_theano_batch(batch_size=batch_size)
+					E = fold.model.encode(I)
+					enc.append(theano.function( [I], E ))
+
+					H = fold.model.get_output_space().make_theano_batch(batch_size=batch_size)
+					D = fold.model.decode(H)
+					dec.append(theano.function( [H], D ))
+
+					I2 = fold.model.get_input_space().make_theano_batch(batch_size=batch_size)
+					cst.append(theano.function([I,I2], fold.algorithm.cost.costs[0].cost(I,I2)))
+				encoders.append(enc)
+				decoders.append(dec)
+				costs.append(cst)
 			print "obj:",obj
 			print "objectives_by_layer:",objectives_by_layer[-1]
 			objectives.append(obj)
 			models.append(train)
 			model_files.append(layer_hypers['save_path']+hypers["layer_fn"]+"_l"+str(layer_num)+".pkl")
 
-		''' IN PROGRESS CODE FOR DEEP COST TRACKING -- NEEDS MODEL RECONSTRUCTION???
-		# Function for calculating the deep reconstruction error -- AE cost only does per-layer error.  This should probably go somewhere else.
-		def deep_recon(data,model,batch_size):
-			results = []
-			for batch in np.array_split(data,max(1,data.shape[0]/batch_size)):
-				result = []
-				for layer in range(len(model['layers'])):
-					d = np.atleast_2d(batch)
-					print cost(d)
-					for l in range(layer):
-						d = model['encoders'][l](d)
-					for l in reversed(range(layer)):
-						d = model['decoders'][l](d)
-					result.append(model.algorithm.cost.expr(d))
-				results.append(result)
-			return np.mean(np.vstack(results))
 
-		batch_size = 1000
+		# Function for calculating the deep reconstruction error -- AE cost only does per-layer error.  This should probably go somewhere else.
+		def deep_recon(data, encoders, decoders, cost, batch_size):
+			results = []
+			if type(encoders[0]) == list:
+				for batch in np.array_split(data,max(1,data.shape[0]/batch_size)):
+					result = []
+					for layer in range(len(encoders)):
+						d = np.atleast_2d(batch)
+						d_primes = []
+						for i in range(len(encoders[layer])):
+							d_prime = d
+							for l in range(layer):
+								d_prime = encoders[l][i](d_prime)
+							for l in reversed(range(layer)):
+								d_prime = decoders[l][i](d_prime)
+							d_primes.append(d_prime)
+						result.append(np.mean([c(d,d_prime) for c,d_prime in zip(cost,d_primes)]))
+					results.append(result)
+			else:
+				for batch in np.array_split(data,max(1,data.shape[0]/batch_size)):
+					result = []
+					for layer in range(len(encoders)):
+						d = np.atleast_2d(batch)
+						d_prime = d
+						for l in range(layer):
+							d_prime = encoders[l](d_prime)
+						for l in reversed(range(layer)):
+							d_prime = decoders[l](d_prime)
+						result.append(cost(d,d_prime))
+					results.append(result)
+			return float(np.mean(np.vstack(results)))
+
 		if 'model' in dir(train):
-			deep_recon_errpr = deep_recon(data.X,train.model,batch_size)
+			deep_recon_error = deep_recon(data.X,encoders,decoders,costs[0],batch_size)
 		else:
-			deep_recon_error = np.mean([deep_recon(data.X,i.model,batch_size) for i in train.trainers])
-		'''
+			deep_recon_error = np.mean([deep_recon(data.X,encoders,decoders,costs[0],batch_size) for i in train.trainers])
+
+		print "deep_recon_error:",deep_recon_error
 		objective = float(np.sum(objectives))
-		print objectives_by_layer
+		print "errors_by_layer:",objectives_by_layer
 		if logging:
 			return {"objective": objective,
+					"deep_recon_error": deep_recon_error,
 					"training_objectives": objectives_by_layer,
 					"model_files": model_files}
 					#"models": models,
 					#"training_data": data}
 		else:
-			return objective
+			return deep_recon_error
+
 
 
 	def __init__(self, domain_name, scratch_path = "", selected_hypers={}):
