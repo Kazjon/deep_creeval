@@ -59,7 +59,7 @@ def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.
 		# Save the best hypers to the database
 		if len(metadata['best_hypers'].keys()):
 			if hypers_to_file:
-				with open(os.path.join(spearmint_params['datapath'],"hypers.txt")) as f:
+				with open(os.path.join(spearmint_params['datapath'],"hypers.txt"),"w") as f:
 					json.dump(metadata['best_hypers'], f, sort_keys=True, indent=4, ensure_ascii=False)
 			escape_mongo(metadata)
 			db.datasets.save(metadata)
@@ -77,10 +77,10 @@ def train_expectations(domain_name,pretrain_start = None, pretrain_stop = None, 
 
 	if metadata is not None:
 		#Use the previously-fit hypers to train a single model with the provided timeslices (or ones from the data)
-		unescape_mongo(metadata)
 		if hypers_from_file:
 			with open(os.path.join(datapath,"hyper_fitting/hypers.txt")) as f:
 				metadata["best_hypers"] = json.load(f)
+		unescape_mongo(metadata)
 		if "best_hypers" in metadata.keys():
 			if pretrain_start is not None:
 				metadata["pretrain_start"] = pretrain_start
@@ -105,7 +105,7 @@ def train_expectations(domain_name,pretrain_start = None, pretrain_stop = None, 
 				cs.stepwise_train(metadata, override_query)
 
 				if steps_to_file:
-					with open(os.path.join(datapath,"steps.txt")) as f:
+					with open(os.path.join(datapath,"steps.txt"),"w") as f:
 						json.dump(metadata['steps'], f, sort_keys=True, indent=4, ensure_ascii=False)
 				escape_mongo(metadata)
 				db.datasets.save(metadata)
@@ -124,7 +124,10 @@ def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, trai
 	metadata = db.datasets.find_one({"name": domain_name})
 
 	if metadata is not None:
-		#Use the previously-fit hypers to train a single model with the provided timeslices (or ones from the data)
+		#Use the previously-trained expectation model to investigate changes in the dataset.
+		if steps_from_file:
+			with open(os.path.join(datapath,"steps.txt")) as f:
+				metadata["steps"] = json.load(f)
 		unescape_mongo(metadata)
 		if "best_hypers" in metadata.keys():
 			if pretrain_start is not None:
@@ -138,7 +141,7 @@ def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, trai
 
 			if all(i in metadata.keys() for i in ["pretrain_start","pretrain_stop","train_stop","time_slice"]):
 				cs = globals()[metadata['model_class']](domain_name, datapath,selected_hypers=metadata["best_hypers"])
-				# Fit the initial model
+				# Inspect the model
 				cs.stepwise_inspect(metadata, override_query, sample_size=sample_size)
 			else:
 				print "Need valid pretrain_start, pretrain_stop, time_stop and time_slice parameters to train a model."
@@ -148,8 +151,17 @@ def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, trai
 		print "Could not find a record for the dataset",domain_name,"in the database."
 
 if __name__ == "__main__":
+	parser = argparse.ArgumentParser(description='Use this to run creeval and discovery temporal unexpectedness at the domain level')
+	parser.add_argument('dataset',help="Name of the dataset to work with")
+	parser.add_argument('-m','--mode',choices=["fit_hypers"], help="Run the fit_hypers step, see --look_back, --stop_thresh and --sample_limit",required=False)
+	parser.add_argument('-l','--look_back',help="How many steps to look back for determining spearmint stall",required=False, default=3)
+	parser.add_argument('-s','--stop_thresh',help="The epsilon for spearmint stalling",required=False, default=0.1)
+	parser.add_argument('-i','--sample_limit',help="How many samples to pull from the dataset for spearmint",required=False,default=0)
+
+	args = parser.parse_args()
+	collname = args.dataset
 	#ten_species = ['Zenaida_macroura', 'Corvus_brachyrhynchos', 'Cardinalis_cardinalis', 'Turdus_migratorius', 'Cyanocitta_cristata', 'Spinus_tristis', 'Sturnus_vulgaris', 'Melospiza_melodia', 'Agelaius_phoeniceus', 'Picoides_pubescens']
-	collname = "ebird_top10_2008_2012"
+	#collname = "ebird_top10_2008_2012"
 	ignore_fields = ["LATITUDE","LONGITUDE",'Zenaida_macroura', 'Corvus_brachyrhynchos', 'Cardinalis_cardinalis', 'Cyanocitta_cristata', 'Spinus_tristis', 'Sturnus_vulgaris', 'Melospiza_melodia', 'Agelaius_phoeniceus', 'Picoides_pubescens']
 
 	species = ['Turdus_migratorius']
@@ -159,6 +171,7 @@ if __name__ == "__main__":
 	override_query = {}
 	override_query["$or"] = [{k:query[k]} for k in query.keys()]
 
-	fit_hypers(collname,spearmint_params = {"look_back": 1,"stop_thresh": 0.1, 'datapath': os.path.join("data/",collname)},override_query=override_query, drop_fields = ignore_fields, sample_limit=1000)
+	if args.mode == "fit_hypers":
+		fit_hypers(collname,spearmint_params = {"look_back": args.look_back,"stop_thresh": args.stop_thresh, 'datapath': os.path.join("data/",collname)},override_query=override_query, drop_fields = ignore_fields, sample_limit=args.sample_limit)
 	#train_expectations(collname, datapath = 'data/ebird/expectations_sp0_k12_drop33_tanhtanh/')
 	#unexpectedness(collname, datapath = 'data/ebird/expectations_sp10.6_k12_drop33/', sample_size=10000)
