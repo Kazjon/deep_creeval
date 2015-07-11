@@ -153,7 +153,7 @@ def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, trai
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description='Use this to run creeval and discovery temporal unexpectedness at the domain level')
 	parser.add_argument('dataset',help="Name of the dataset to work with")
-	parser.add_argument('-e','--epochs',help="How many epochs to train for",required=False,default=10)
+	parser.add_argument('-e','--epochs',help="How many epochs to train for",required=False, type=int, default=10)
 	parser.add_argument('-m','--mode',choices=["fit_hypers"], help="Run the fit_hypers step, see --look_back, --stop_thresh and --sample_limit",required=False)
 	parser.add_argument('-l','--look_back',help="How many steps to look back for determining spearmint stall",required=False, default=3)
 	parser.add_argument('-s','--stop_thresh',help="The epsilon for spearmint stalling",required=False, default=0.1)
