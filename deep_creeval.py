@@ -50,7 +50,7 @@ def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.
 	if metadata is not None:
 		unescape_mongo(metadata)
 
-		cs = globals()[metadata['model_class']](domain_name, spearmint_params['datapath'], training_epochs)
+		cs = globals()[metadata['model_class']](domain_name, spearmint_params['datapath'], max_epochs = training_epochs)
 		q = metadata["query"]
 		if len(override_query.keys()):
 			q = override_query
