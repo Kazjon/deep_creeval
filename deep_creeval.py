@@ -38,7 +38,7 @@ def unescape_mongo(metadata):
 
 
 # Runs spearmint on a given domain and saves the best hypers for future use
-def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.05, 'datapath': "data/"}, hypers_to_file=True, override_query = {}, drop_fields = [], sample_limit = 0):
+def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.05, 'datapath': "data/"}, hypers_to_file=True, override_query = {}, drop_fields = [], sample_limit = 0, training_epochs = 10):
 
 	spearmint_params["datapath"] = os.path.join(spearmint_params["datapath"],"hyper_fitting")
 
@@ -50,7 +50,7 @@ def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.
 	if metadata is not None:
 		unescape_mongo(metadata)
 
-		cs = globals()[metadata['model_class']](domain_name, spearmint_params['datapath'])
+		cs = globals()[metadata['model_class']](domain_name, spearmint_params['datapath'], training_epochs)
 		q = metadata["query"]
 		if len(override_query.keys()):
 			q = override_query
@@ -153,6 +153,7 @@ def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, trai
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description='Use this to run creeval and discovery temporal unexpectedness at the domain level')
 	parser.add_argument('dataset',help="Name of the dataset to work with")
+	parser.add_argument('-e','--epochs',help="How many epochs to train for",required=False,default=10)
 	parser.add_argument('-m','--mode',choices=["fit_hypers"], help="Run the fit_hypers step, see --look_back, --stop_thresh and --sample_limit",required=False)
 	parser.add_argument('-l','--look_back',help="How many steps to look back for determining spearmint stall",required=False, default=3)
 	parser.add_argument('-s','--stop_thresh',help="The epsilon for spearmint stalling",required=False, default=0.1)
@@ -172,6 +173,6 @@ if __name__ == "__main__":
 	override_query["$or"] = [{k:query[k]} for k in query.keys()]
 
 	if args.mode == "fit_hypers":
-		fit_hypers(collname,spearmint_params = {"look_back": args.look_back,"stop_thresh": args.stop_thresh, 'datapath': os.path.join("data/",collname)},override_query=override_query, drop_fields = ignore_fields, sample_limit=args.sample_limit)
+		fit_hypers(collname,spearmint_params = {"look_back": args.look_back,"stop_thresh": args.stop_thresh, 'datapath': os.path.join("data/",collname)},override_query=override_query, drop_fields = ignore_fields, sample_limit=args.sample_limit, training_epochs = args.epochs)
 	#train_expectations(collname, datapath = 'data/ebird/expectations_sp0_k12_drop33_tanhtanh/')
 	#unexpectedness(collname, datapath = 'data/ebird/expectations_sp10.6_k12_drop33/', sample_size=10000)

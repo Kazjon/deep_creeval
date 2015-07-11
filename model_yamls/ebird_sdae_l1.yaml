@@ -1,7 +1,8 @@
 !obj:pylearn2.cross_validation.TrainCV {
     dataset_iterator:  !obj:pylearn2.cross_validation.dataset_iterators.DatasetKFold {
         dataset: &train !obj:DUconfig.get_dataset {},
-        n_folds: %(n_folds)i
+        n_folds: %(n_folds)i,
+        shuffle: True
     },
     model: !obj:pylearn2.models.autoencoder.DenoisingAutoencoder {
         nvis : %(nvis)i,
