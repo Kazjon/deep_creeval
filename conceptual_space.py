@@ -457,6 +457,7 @@ class ConceptualSpace():
 					for task in main.load_task_group(db, options, resource.tasks).tasks.values():
 						performance = task.valid_normalized_data_dict["values"][::-1]
 						stalled.append(0)
+						print performance,'(',look_back,')'
 						if len(performance) > look_back:
 							print performance[0:look_back+1]
 							print "Diffs: ",

@@ -155,9 +155,9 @@ if __name__ == "__main__":
 	parser.add_argument('dataset',help="Name of the dataset to work with")
 	parser.add_argument('-e','--epochs',help="How many epochs to train for",required=False, type=int, default=10)
 	parser.add_argument('-m','--mode',choices=["fit_hypers"], help="Run the fit_hypers step, see --look_back, --stop_thresh and --sample_limit",required=False)
-	parser.add_argument('-l','--look_back',help="How many steps to look back for determining spearmint stall",required=False, default=3)
-	parser.add_argument('-s','--stop_thresh',help="The epsilon for spearmint stalling",required=False, default=0.1)
-	parser.add_argument('-i','--sample_limit',help="How many samples to pull from the dataset for spearmint",required=False,default=0)
+	parser.add_argument('-l','--look_back',help="How many steps to look back for determining spearmint stall",type=int, required=False, default=3)
+	parser.add_argument('-s','--stop_thresh',help="The epsilon for spearmint stalling",type=float, required=False, default=0.1)
+	parser.add_argument('-i','--sample_limit',help="How many samples to pull from the dataset for spearmint",type=int, required=False,default=0)
 
 	args = parser.parse_args()
 	collname = args.dataset
