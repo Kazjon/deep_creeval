@@ -150,7 +150,7 @@ def ebird_insert_timefield(collname="ebird",timefield="timefield"):
 		row[timefield] = row['YEAR'] + (float(row['DAY']) / 366.0)
 		if i % 100000 == 0:
 			print i,":",row[timefield],":",row['YEAR'],row['DAY']
-		db.ebird.save(row)
+		db[collname].save(row)
 
 
 if __name__ == "__main__":

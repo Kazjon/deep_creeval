@@ -1,6 +1,15 @@
 import pymongo, argparse, csv, sys
 from copy import copy
 from pymongo import MongoClient
+import sklearn.datasets
+
+def gen_synthetic_data(n_samples_per_step=10000,n_steps=5,n_features=50, n_informative=10, n_redundant=10, n_repeated=5, n_clusters = 10):
+	for s in range(n_steps):
+		time = float(s)/float(n_steps) + 1./float(n_steps*2)
+		data, _ = sklearn.datasets.make_classification(n_samples=n_samples_per_step,n_features=n_features, n_redundant=n_redundant, n_informative=n_informative, n_repeated=n_repeated, n_classes=1, n_clusters_per_class=n_clusters)
+
+def merge_synthetic_data(data1,data2):
+	pass
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description='Use this to import data for use by creeval')
@@ -44,7 +53,7 @@ if __name__ == "__main__":
 					row[k] = vf
 			for ignore in args.ignore.split():
 				del row[ignore]
- 			print row
+			print row
 			#print unicode(row,'utf-8',errors='ignore')
 			#row['name'] = unicode(row['name'],'utf-8',errors='ignore')
 			data.insert(row)

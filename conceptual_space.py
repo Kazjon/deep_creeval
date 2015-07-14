@@ -150,21 +150,21 @@ class ConceptualSpace():
 		self.hypers = copy.deepcopy(selected_hypers)
 		self.fixed_hypers["layer_fn"] = self.short_domain_name+"_"+self.fixed_hypers["layer_fn"]
 
-	def pretrain(self,metadata, override_query):
+	def pretrain(self,metadata, override_query,sample_limit=0):
 		q = metadata["query"]
 		if len(override_query.keys()):
 			q = override_query
 		pretrain_query = {'$and': [deepcopy(q)]}
 		pretrain_query['$and'].append({metadata["timefield"]: {"$gte": metadata["pretrain_start"]}})
 		pretrain_query['$and'].append({metadata["timefield"]: {"$lt": metadata["pretrain_stop"]}})
-		ddm = monary_load(self.domain_name,metadata["fields_x"],metadata["fields_y"],find_args=pretrain_query)
+		ddm = monary_load(self.domain_name,metadata["fields_x"],metadata["fields_y"],find_args=pretrain_query,stop=sample_limit)
 		if not ddm.X.shape[0]:
 			sys.exit("Pretrain failed as no examples were found within the pretraining time window of "+str(metadata["pretrain_start"])+" to "+str(metadata["pretrain_stop"]))
 		#scaler = pickle.load(open(domain_name+"_scaler.pkl","rb"))
 		DUconfig.dataset = ddm
 		params = self.hypers
 		params.update(self.fixed_hypers)
-		params['save_path'] = self.scratch_path+"step_0/"
+		params['save_path'] = os.path.join(self.scratch_path,"step_0")
 		params['yaml_path'] = params['yaml_path'].lstrip("./") #The existing yaml_path starts with "../../" in order to get out of the spearmint dir.
 		params["train_stop"] = ddm.X.shape[0]
 		result = self.run(ddm,params,logging=True, cv=False)
@@ -173,7 +173,7 @@ class ConceptualSpace():
 		#pprint(result)
 		return result
 
-	def stepwise_train(self,metadata, override_query):
+	def stepwise_train(self,metadata, override_query,sample_limit=0):
 		#metadata["time_slice"] = 1 # Debug measure to speed shit up.
 		start_time = metadata["pretrain_stop"]
 		stop_time = metadata["pretrain_stop"] + metadata["time_slice"]
@@ -189,16 +189,16 @@ class ConceptualSpace():
 			step_query['$and'].append({metadata["timefield"]: {"$lt": stop_time}})
 
 			#train
-			ddm = monary_load(self.domain_name,metadata["fields_x"],metadata["fields_y"],find_args=step_query)
+			ddm = monary_load(self.domain_name,metadata["fields_x"],metadata["fields_y"],find_args=step_query,stop=sample_limit)
 			if ddm.X.shape[0]:
 				DUconfig.dataset = ddm
 				params = self.hypers
 				params.update(self.fixed_hypers)
-				params['save_path'] = self.scratch_path+"step_"+str(len(metadata["steps"]))+"/"
+				params['save_path'] = os.path.join(self.scratch_path,"step_"+str(len(metadata["steps"])))
 				params['yaml_path'] = params['yaml_path'].lstrip("./") #The existing yaml_path starts with "../../" in order to get out of the spearmint dir.
 				params["train_stop"] = ddm.X.shape[0]
-				pretrain_prefix = self.scratch_path+"step_"+str(len(metadata["steps"])-1)+"/"
-				pretrain_paths = [pretrain_prefix+params["layer_fn"]+"_l"+str(i+1)+".pkl" for i in range(params["num_layers"])]
+				pretrain_prefix = os.path.join(self.scratch_path,"step_"+str(len(metadata["steps"])-1))
+				pretrain_paths = [os.path.join(pretrain_prefix,params["layer_fn"]+"_l"+str(i+1)+".pkl") for i in range(params["num_layers"])]
 				result = self.run(ddm, params,logging=True, pretrained = pretrain_paths, cv=False)
 			else:
 				result = {"error": "NO DATA FOUND FOR THIS TIMESTEP."}
@@ -1054,6 +1054,7 @@ class SDAConceptualSpace(ConceptualSpace):
 	def run(self,data, hypers, logging=False, pretrained = [], cv = True):
 		from pylearn2.config import yaml_parse
 		import theano
+		import os.path
 		from pylearn2.utils import safe_zip
 		from pylearn2.utils.data_specs import DataSpecsMapping
 
@@ -1141,7 +1142,7 @@ class SDAConceptualSpace(ConceptualSpace):
 			print "objectives_by_layer:",objectives_by_layer[-1]
 			objectives.append(obj)
 			models.append(train)
-			model_files.append(layer_hypers['save_path']+hypers["layer_fn"]+"_l"+str(layer_num)+".pkl")
+			model_files.append(os.path.join(layer_hypers['save_path'],hypers["layer_fn"]+"_l"+str(layer_num)+".pkl"))
 
 		# Function for calculating the deep reconstruction error -- AE cost only does per-layer error.  This should probably go somewhere else.
 		def deep_recon(data, encoders, decoders, cost, batch_size, test_indices):
