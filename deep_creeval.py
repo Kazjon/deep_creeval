@@ -162,6 +162,7 @@ def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, trai
 		print "Could not find a record for the dataset",domain_name,"in the database."
 
 if __name__ == "__main__":
+	print "Started creeval."
 	parser = argparse.ArgumentParser(description='Use this to run creeval and discovery temporal unexpectedness at the domain level')
 	parser.add_argument('dataset',help="Name of the dataset to work with")
 	parser.add_argument('-e','--epochs',help="How many epochs to train for",required=False, type=int, default=10)
@@ -197,11 +198,14 @@ if __name__ == "__main__":
 	override_query["$or"] = [{k:query[k]} for k in query.keys()]
 
 	if args.mode == "fit_hypers":
+		print "Initiating hyperparameter fit on",collname+"."
 		fit_hypers(collname,spearmint_params = {"look_back": args.look_back,"stop_thresh": args.stop_thresh, 'datapath': os.path.join("data/",collname)},override_query=override_query, drop_fields = ignore_fields, sample_limit=args.sample_limit, training_epochs = args.epochs)
 	elif args.mode == "train_exp":
+		print "Initiating expectation training on",args.exp_name+"."
 		p = os.path.join("data/",collname,args.exp_name)
 		if not os.path.exists(p):
 			os.makedirs(p)
 		train_expectations(collname, pretrain_start = args.pretrain_start, pretrain_stop = args.pretrain_stop, train_stop = args.train_stop, time_slice = args.time_slice, datapath = p, override_query=override_query, drop_fields = ignore_fields, training_epochs = args.epochs, sample_limit=args.sample_limit)
 	elif args.mode == "unex":
+		print "Initiating unexpectedness evaluation of",args.exp_name+"."
 		unexpectedness(collname, pretrain_start = args.pretrain_start, pretrain_stop = args.pretrain_stop, train_stop = args.train_stop, time_slice = args.time_slice, datapath = os.path.join("data/",collname,args.exp_name), override_query=override_query, drop_fields = ignore_fields, sample_size=args.sample_limit)
