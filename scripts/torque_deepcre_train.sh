@@ -36,5 +36,5 @@ exec 1>$PBS_O_WORKDIR/$PBS_JOBNAME-$SHORT_JOBID.out  2>$PBS_O_WORKDIR/$PBS_JOBNA
 ### run job
 ./startmongo.sh
 cd deep_creeval
-python deep_creeval.py ebird_top10_2008_2012 -m f train_exp --epochs 5 --sample_limit 0 --exp_name exp_5yr_monthly_5epochs  --pretrain_start 2008 --pretrain_stop 2009 --train_stop 2013 --time_slice 0.0833
+python deep_creeval.py ebird_top10_2008_2012 -m train_exp --epochs 5 --sample_limit 0 --exp_name exp_5yr_monthly_5epochs  --pretrain_start 2008 --pretrain_stop 2009 --train_stop 2013 --time_slice 0.0833
 kill -9 `pidof mongod`

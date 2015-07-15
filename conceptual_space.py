@@ -215,9 +215,10 @@ class ConceptualSpace():
 			q = override_query
 		else:
 			q = deepcopy(metadata["query"])
+		print "Reached for loop in stepwise_inspect"
+		print 'len(metadata["steps"]):',len(metadata["steps"])
+		print 'metadata["steps"]:',metadata["steps"]
 		for i,step in enumerate(metadata["steps"][1:]):
-			if i > 12:
-				sys.exit()
 			stop_time = step["stop"]
 			print "Inspecting step "+str(i)+". "+str(start_time)+"--"+str(stop_time)+"."
 			if "error" not in step.keys():
@@ -643,6 +644,7 @@ class SDAConceptualSpace(ConceptualSpace):
 		for alpha in [1000]:
 			for m,model in enumerate([model1, model2]):
 				model["tsne_joint_probs"] = squareform(_joint_probabilities(pairwise_distances(validation.check_array(model["F_by_O_normed"].T, accept_sparse=['csr', 'csc', 'coo'], dtype=np.float64), metric='euclidean', n_jobs=1, squared=True),30,2))
+				'''
 				model["clustermodel"],model["clusterreps"],model["clusterpreds"] = self.representation_clustering_VBGMM(model["F_by_O_normed"].T,n_components=6,alpha=alpha,tol=1e-9,n_iter=10000000)
 				model["clustermeans"] = []
 				model["clusterstdevs"] = []
@@ -669,7 +671,7 @@ class SDAConceptualSpace(ConceptualSpace):
 				plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=[float(p) for p in model["clusterpreds"]])
 				plt.savefig(os.path.join(save_path,model["name"]+"_ObyA_TSNE.png"), bbox_inches='tight')
 				plt.close("all")
-
+				'''
 				'''
 				plt.figure(figsize=(20,20))
 				df = pd.DataFrame(O_by_A)
@@ -708,6 +710,7 @@ class SDAConceptualSpace(ConceptualSpace):
 			cosdiffs = sklearn.preprocessing.MinMaxScaler().fit_transform(cosdiffs)
 			cosdiffs = np.sqrt(cosdiffs)
 
+			'''
 			for model in [model1,model2]:
 				plt.figure(figsize=(20,20))
 				df = pd.DataFrame(O_by_A)
@@ -730,6 +733,7 @@ class SDAConceptualSpace(ConceptualSpace):
 				radviz(df,"class",s=[(basesize+(modsize*p))/10. for p in cosdiffs], alpha=0.5)
 				plt.savefig(os.path.join(save_path,model["name"]+"featureplot_cosdiffs_"+str(alpha)+".png"), bbox_inches='tight')
 				plt.close("all")
+			'''
 
 			plt.figure(figsize=(20,20))
 			plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=probdiffs, cmap="copper", s=[basesize+(modsize*p) for p in probdiffs])

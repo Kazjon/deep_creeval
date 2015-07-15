@@ -150,6 +150,7 @@ def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, trai
 				original_fields_y = metadata["fields_y"]
 				metadata["fields_x"] = [f for f in metadata['fields_x'] if f not in drop_fields]
 				metadata["fields_y"] = [f for f in metadata['fields_y'] if f not in drop_fields]
+				print "Generating conceptual space for",domain_name,"using",metadata['model_class']+"."
 				cs = globals()[metadata['model_class']](domain_name, datapath,selected_hypers=metadata["best_hypers"])
 				# Inspect the model
 				cs.stepwise_inspect(metadata, override_query, sample_size=sample_size)
