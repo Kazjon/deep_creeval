@@ -97,7 +97,36 @@ def _joint_probabilities(distances, desired_perplexity, verbose):
 	P = np.maximum(squareform(P) / sum_P, MACHINE_EPSILON)
 	return P
 
-def monary_load(collection, fields_x, fields_y, start=0, stop=0, find_args={}):
+# Function for calculating the deep reconstruction error -- AE cost only does per-layer error.  This should probably go somewhere else.
+def deep_recon(data, encoders, decoders, cost, batch_size, test_indices=[]):
+	results = []
+	if len(test_indices):
+		for fold in range(len(encoders)):
+			test_data = data[test_indices[fold]]
+			batch_results = []
+			for batch in np.array_split(test_data,max(1,test_data.shape[0]/batch_size)):
+				d = np.atleast_2d(batch)
+				d_prime = d
+				for l in range(fold):
+					d_prime = encoders[l][fold](d_prime)
+				for l in reversed(range(fold)):
+					d_prime = decoders[l][fold](d_prime)
+				batch_results.append(cost[fold](d,d_prime))
+			results.append(np.mean(np.vstack(batch_results)))
+		results = np.mean(np.vstack(results))
+	else:
+		for batch in np.array_split(data,max(1,data.shape[0]/batch_size)):
+			d = np.atleast_2d(batch)
+			d_prime = d
+			for l in range(len(encoders)):
+				d_prime = encoders[l](d_prime)
+			for l in reversed(range(len(encoders))):
+				d_prime = decoders[l](d_prime)
+			results.append(cost(d,d_prime))
+		results = np.mean(np.vstack(results))
+	return float(results) # We have to cast this to a non-numpy float for some reason to do with mongodb -- I suspect BSON is at fault, but no matter.
+
+def monary_load(collection, fields_x, fields_y, start=0, stop=0, find_args={}, return_timefield=False,timefield="timefield"):
 	print "Loading from MongoDB via monary with:"
 	print "  - collection:",collection
 	print "  - fields_x:",fields_x
@@ -105,6 +134,10 @@ def monary_load(collection, fields_x, fields_y, start=0, stop=0, find_args={}):
 	print "  - start:",start
 	print "  - stop:",stop
 	print "  - find_args:",find_args
+
+	if return_timefield:
+		fields_x = deepcopy(fields_x)
+		fields_x.append(timefield)
 	numfields = len(fields_x)+len(fields_y)
 	with Monary("127.0.0.1") as monary:
 		out = monary.query(
@@ -121,6 +154,9 @@ def monary_load(collection, fields_x, fields_y, start=0, stop=0, find_args={}):
 		#if any(np.isnan(col)):
 	out = np.ma.row_stack(out).T
 	X = out[:,0:len(fields_x)]
+	if return_timefield:
+		timefields = X[:,-1]
+		X = X[:,0:-1]
 	y = out[:,len(fields_x):]
 	y = (y > 0).astype(int)
 
@@ -131,6 +167,8 @@ def monary_load(collection, fields_x, fields_y, start=0, stop=0, find_args={}):
 		y = np.asarray(y)
 
 	print "Retrieved and scaled",X.shape[0],"datapoints."
+	if return_timefield:
+		return DenseDesignMatrix(X=X,y=y), timefields
 	return DenseDesignMatrix(X=X,y=y)
 
 class ConceptualSpace():
@@ -209,35 +247,35 @@ class ConceptualSpace():
 			start_time = stop_time
 			stop_time += metadata["time_slice"]
 
-	def stepwise_inspect(self,metadata,override_query, sample_size=50000,save_path="", resample=1, ):
+	def stepwise_inspect(self,metadata,override_query, sample_size=50000,save_path="", resample=1, start_step=0):
 		start_time = metadata["pretrain_start"]
 		if len(override_query.keys()):
 			q = override_query
 		else:
 			q = deepcopy(metadata["query"])
-		print "Reached for loop in stepwise_inspect"
-		print 'len(metadata["steps"]):',len(metadata["steps"])
-		print 'metadata["steps"]:',metadata["steps"]
-		for i,step in enumerate(metadata["steps"][1:]):
+		print "Calculating unexpectedness of each step."
+		for i,step in enumerate(metadata["steps"][start_step+1:]):
+			#start_time = step["start"]
 			stop_time = step["stop"]
-			print "Inspecting step "+str(i)+". "+str(start_time)+"--"+str(stop_time)+"."
+			print "Inspecting step "+str(i+start_step)+". "+str(start_time)+"--"+str(stop_time)+"."
 			if "error" not in step.keys():
 				#query
-				print "pre deepcopy"
 				step_query = {'$and': [q]}
-				print "post deepcopy"
 				step_query['$and'].append({metadata["timefield"]: {"$gte": start_time}})
 				#step_query['$and'].append({metadata["timefield"]: {"$gte": metadata["pretrain_start"]}})
 				step_query['$and'].append({metadata["timefield"]: {"$lt": stop_time}})
 				print "   --- Query built."
 
 				#sample
-				data = monary_load(self.domain_name,metadata["fields_x"],metadata["fields_y"],find_args=step_query)
+				data, times = monary_load(self.domain_name,metadata["fields_x"],metadata["fields_y"],find_args=step_query, return_timefield=True,timefield=metadata["timefield"])
 				for k in range(resample): #Testing multiple clusterings of each step with different samplings.
 					if data.X.shape[0] > sample_size:
-						data_sample = data.X[np.random.choice(data.X.shape[0],size=sample_size),:]
+						indices = np.random.choice(data.X.shape[0],size=sample_size)
+						times_sample = times[indices]
+						data_sample = data.X[indices,:]
 					else:
 						data_sample = data.X
+						times_sample = times
 					#del data
 					print "   --- Data loaded."
 
@@ -252,7 +290,7 @@ class ConceptualSpace():
 					model1["name"] = "current_"+str(k)
 					print "   --- Model 1 load complete."
 
-					prev = i # i is actually already the index of the previous model, since we're iterating from element 1 onwards.
+					prev = i+start_step # i is actually already the index of the previous model, since we're iterating from element 1 onwards.
 					while "error" in metadata['steps'][prev].keys():
 						prev -= 1
 						if prev < 0:
@@ -267,10 +305,11 @@ class ConceptualSpace():
 					model2["name"] = "previous_"+str(k)
 					print "   --- Model 2 load complete"
 
-					self.compare_models(data_sample, model1, model2, save_path=os.path.dirname(step["model_files"][0]))
+					self.compare_models(data_sample, model1, model2, times_sample, save_path=os.path.dirname(step["model_files"][0]))
 					del model1
 					del model2
 					del data_sample
+					del times_sample
 			else:
 				print "   --- Error: "+step["error"]
 
@@ -290,7 +329,7 @@ class ConceptualSpace():
 		raise NotImplementedError
 
 	#This needs to be implemented by subclasses
-	def compare_models(self, O_by_A, model1, model2,save_path=""):
+	def compare_models(self, O_by_A, model1, model2, times, save_path=""):
 		raise NotImplementedError
 
 	def train_mongo(self, fields_x, fields_y, query, threshold = 0.01, look_back = 3, sample_limit = 0):
@@ -362,7 +401,7 @@ class ConceptualSpace():
 		with open(experiment_dir+"/"+fname+".py", "w") as f:
 			sanitised_fixed_hypers = deepcopy(self.fixed_hypers) # This gets rid of objects that seem to get left in the hypers -- particularly a Costs object.
 			sanitise_for_str_out(sanitised_fixed_hypers)
-			f.write(spearmintImports+"\nimport numpy as np\nimport sys\nsys.path.append('..')\nfrom conceptual_space import monary_load\nimport DUconfig\nfrom monary import Monary\n\n")
+			f.write(spearmintImports+"\nimport numpy as np\nimport sys\nsys.path.append('..')\nfrom conceptual_space import monary_load,deep_recon\nimport DUconfig\nfrom monary import Monary\n\n")
 			f.write(spearmintRun+"\n")
 			f.write(textwrap.dedent("""\
 				def main(job_id, params):
@@ -553,8 +592,8 @@ class SDAConceptualSpace(ConceptualSpace):
 					#"nhid_l1": range(100,1000,50),
 
 	fixed_hypers = {"train_stop": 50000,
-					"batch_size": 500,
-					"monitoring_batch_size": 500,
+					"batch_size": 100,
+					"monitoring_batch_size": 100,
 					"max_epochs": 1,
 					"save_path": ".",
 					"yaml_path": "../../../../model_yamls/",
@@ -639,11 +678,12 @@ class SDAConceptualSpace(ConceptualSpace):
 
 		pprint(alignments)
 
-	def compare_models(self, O_by_A, model1, model2, save_path=""):
+	def compare_models(self, O_by_A, model1, model2, times, save_path=""):
 		ObyA_tsne = np.array(list(bh_tsne.bh_tsne(O_by_A, no_dims=2, perplexity=30)))
 		for alpha in [1000]:
 			for m,model in enumerate([model1, model2]):
 				model["tsne_joint_probs"] = squareform(_joint_probabilities(pairwise_distances(validation.check_array(model["F_by_O_normed"].T, accept_sparse=['csr', 'csc', 'coo'], dtype=np.float64), metric='euclidean', n_jobs=1, squared=True),30,2))
+				#model["tsne"] = np.array(list(bh_tsne.bh_tsne(model["F_by_O_normed"].T, no_dims=2, perplexity=30)))
 				'''
 				model["clustermodel"],model["clusterreps"],model["clusterpreds"] = self.representation_clustering_VBGMM(model["F_by_O_normed"].T,n_components=6,alpha=alpha,tol=1e-9,n_iter=10000000)
 				model["clustermeans"] = []
@@ -660,7 +700,6 @@ class SDAConceptualSpace(ConceptualSpace):
 
 				print model["clusterreps"][0:10,:]
 				#tsne = TSNE(n_components=2, perplexity=30).fit_transform(model["F_by_O_normed"].T)
-				model["tsne"] = np.array(list(bh_tsne.bh_tsne(model["F_by_O_normed"].T, no_dims=2, perplexity=30)))
 				plt.figure(figsize=(20,20))
 				plt.scatter(model["tsne"][:,0],model["tsne"][:,1], c=[float(p) for p in model["clusterpreds"]])
 				plt.savefig(os.path.join(save_path,model["name"]+"_FbyO_TSNE.png"), bbox_inches='tight')
@@ -705,10 +744,37 @@ class SDAConceptualSpace(ConceptualSpace):
 			#probdiffs = np.absolute(model1["tsne_joint_probs"] - model2["tsne_joint_probs"])
 			probdiffs = [cosine(u,v) for (u,v) in zip(model1["tsne_joint_probs"], model2["tsne_joint_probs"])]
 			probdiffs = sklearn.preprocessing.MinMaxScaler().fit_transform(probdiffs)
-			probdiffs = np.sqrt(probdiffs)
+			sq_probdiffs = np.sqrt(probdiffs)
 			cosdiffs = [cosine(u,v) for (u,v) in zip(model1["F_by_O_normed"].T, model2["F_by_O_normed"].T)]
 			cosdiffs = sklearn.preprocessing.MinMaxScaler().fit_transform(cosdiffs)
-			cosdiffs = np.sqrt(cosdiffs)
+			sq_cosdiffs = np.sqrt(cosdiffs)
+			m1_errors = [deep_recon(d,model1["model"]["encoders"],model1["model"]["decoders"],model1["model"]["comparative_costs"][0],self.fixed_hypers["batch_size"]) for d in O_by_A]
+			m2_errors = [deep_recon(d,model2["model"]["encoders"],model2["model"]["decoders"],model2["model"]["comparative_costs"][0],self.fixed_hypers["batch_size"]) for d in O_by_A]
+			dErrors = np.array(m2_errors) - np.array(m1_errors)
+
+			#Comparisons against time and error
+			plt.figure(figsize=(10,10))
+			plt.scatter(times,probdiffs, cmap="copper", s=5)
+			plt.savefig(os.path.join(save_path,"probdiffs_v_times.png"), bbox_inches='tight')
+			plt.close("all")
+			plt.figure(figsize=(10,10))
+			plt.scatter(times,cosdiffs, cmap="copper", s=5)
+			plt.savefig(os.path.join(save_path,"cosdiffs_v_times.png"), bbox_inches='tight')
+			plt.close("all")
+			plt.figure(figsize=(10,10))
+			plt.scatter(times,dErrors, cmap="copper", s=5)
+			plt.savefig(os.path.join(save_path,"dErrors_v_times.png"), bbox_inches='tight')
+
+			plt.close("all")
+			plt.figure(figsize=(10,10))
+			plt.scatter(cosdiffs,dErrors, cmap="copper", s=5)
+			plt.savefig(os.path.join(save_path,"cosdiffs_v_dErrors.png"), bbox_inches='tight')
+			plt.close("all")
+			plt.close("all")
+			plt.figure(figsize=(10,10))
+			plt.scatter(probdiffs,dErrors, cmap="copper", s=5)
+			plt.savefig(os.path.join(save_path,"probdiffs_v_dErrors.png"), bbox_inches='tight')
+			plt.close("all")
 
 			'''
 			for model in [model1,model2]:
@@ -736,29 +802,36 @@ class SDAConceptualSpace(ConceptualSpace):
 			'''
 
 			plt.figure(figsize=(20,20))
-			plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=probdiffs, cmap="copper", s=[basesize+(modsize*p) for p in probdiffs])
- 			plt.savefig(os.path.join(save_path,"ObyA_TSNE_probdiffs.png"), bbox_inches='tight')
+			plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=probdiffs, cmap="copper", s=[basesize+(modsize*p) for p in sq_probdiffs])
+			plt.savefig(os.path.join(save_path,"ObyA_TSNE_probdiffs.png"), bbox_inches='tight')
 			plt.close("all")
+
+			'''
 			plt.figure(figsize=(20,20))
-			plt.scatter(model1["tsne"][:,0],model1["tsne"][:,1], c=probdiffs, cmap="copper", s=[basesize+(modsize*p) for p in probdiffs])
+			plt.scatter(model1["tsne"][:,0],model1["tsne"][:,1], c=probdiffs, cmap="copper", s=[basesize+(modsize*p) for p in sq_probdiffs])
 			plt.savefig(os.path.join(save_path,model1["name"]+"_FbyO_TSNE_probdiffs.png"), bbox_inches='tight')
 			plt.close("all")
 			plt.figure(figsize=(20,20))
-			plt.scatter(model2["tsne"][:,0],model2["tsne"][:,1], c=probdiffs, cmap="copper", s=[basesize+(modsize*p) for p in probdiffs])
+			plt.scatter(model2["tsne"][:,0],model2["tsne"][:,1], c=probdiffs, cmap="copper", s=[basesize+(modsize*p) for p in sq_probdiffs])
 			plt.savefig(os.path.join(save_path,model2["name"]+"_FbyO_TSNE_probdiffs.png"), bbox_inches='tight')
 			plt.close("all")
+			'''
+
 			plt.figure(figsize=(20,20))
-			plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=cosdiffs, cmap="copper", s=[basesize+(modsize*p) for p in cosdiffs])
- 			plt.savefig(os.path.join(save_path,"ObyA_TSNE_cosdiffs.png"), bbox_inches='tight')
+			plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=cosdiffs, cmap="copper", s=[basesize+(modsize*p) for p in sq_cosdiffs])
+			plt.savefig(os.path.join(save_path,"ObyA_TSNE_cosdiffs.png"), bbox_inches='tight')
 			plt.close("all")
+
+			'''
 			plt.figure(figsize=(20,20))
-			plt.scatter(model1["tsne"][:,0],model1["tsne"][:,1], c=cosdiffs, cmap="copper", s=[basesize+(modsize*p) for p in cosdiffs])
+			plt.scatter(model1["tsne"][:,0],model1["tsne"][:,1], c=cosdiffs, cmap="copper", s=[basesize+(modsize*p) for p in sq_cosdiffs])
 			plt.savefig(os.path.join(save_path,model1["name"]+"_FbyO_TSNE_cosdiffs.png"), bbox_inches='tight')
 			plt.close("all")
 			plt.figure(figsize=(20,20))
-			plt.scatter(model2["tsne"][:,0],model2["tsne"][:,1], c=cosdiffs, cmap="copper", s=[basesize+(modsize*p) for p in cosdiffs])
+			plt.scatter(model2["tsne"][:,0],model2["tsne"][:,1], c=cosdiffs, cmap="copper", s=[basesize+(modsize*p) for p in sq_cosdiffs])
 			plt.savefig(os.path.join(save_path,model2["name"]+"_FbyO_TSNE_cosdiffs.png"), bbox_inches='tight')
 			plt.close("all")
+			'''
 
 		#sys.exit()
 		'''
@@ -1101,6 +1174,7 @@ class SDAConceptualSpace(ConceptualSpace):
 				train.model = pickle.load(open(pretrained[layer_num-1]))
 				print "Replaced model with pretrained one from",pretrained[layer_num-1]
 				train.model.monitor = Monitor(train.model)
+				train.model.corruptor.__init__(train.model.corruptor.corruption_level)
 			train.main_loop()
 
 
@@ -1147,35 +1221,6 @@ class SDAConceptualSpace(ConceptualSpace):
 			objectives.append(obj)
 			models.append(train)
 			model_files.append(os.path.join(layer_hypers['save_path'],hypers["layer_fn"]+"_l"+str(layer_num)+".pkl"))
-
-		# Function for calculating the deep reconstruction error -- AE cost only does per-layer error.  This should probably go somewhere else.
-		def deep_recon(data, encoders, decoders, cost, batch_size, test_indices):
-			results = []
-			if len(test_indices):
-				for fold in range(len(encoders)):
-					test_data = data[test_indices[fold]]
-					batch_results = []
-					for batch in np.array_split(test_data,max(1,test_data.shape[0]/batch_size)):
-						d = np.atleast_2d(batch)
-						d_prime = d
-						for l in range(fold):
-							d_prime = encoders[l][fold](d_prime)
-						for l in reversed(range(fold)):
-							d_prime = decoders[l][fold](d_prime)
-						batch_results.append(cost[fold](d,d_prime))
-					results.append(np.mean(np.vstack(batch_results)))
-				results = np.mean(np.vstack(results))
-			else:
-				for batch in np.array_split(data,max(1,data.shape[0]/batch_size)):
-					d = np.atleast_2d(batch)
-					d_prime = d
-					for l in range(len(encoders)):
-						d_prime = encoders[l](d_prime)
-					for l in reversed(range(len(encoders))):
-						d_prime = decoders[l](d_prime)
-					results.append(cost(d,d_prime))
-				results = np.mean(np.vstack(results))
-			return float(results) # We have to cast this to a non-numpy float for some reason to do with mongodb -- I suspect BSON is at fault, but no matter.
 
 		deep_recon_error = deep_recon(data.X,encoders,decoders,costs[0],hypers["batch_size"], test_indices)
 

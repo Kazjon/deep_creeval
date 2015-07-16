@@ -123,7 +123,7 @@ def train_expectations(domain_name,pretrain_start = None, pretrain_stop = None, 
 		print "Could not find a record for the dataset",domain_name,"in the database."
 
 # Measures the unexpectedness of a given saved model.
-def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, train_stop = None, time_slice = None, sample_size= 50000, datapath="data/", steps_from_file=True, override_query = {}, drop_fields = []):
+def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, train_stop = None, time_slice = None, sample_size= 50000, datapath="data/", steps_from_file=True, override_query = {}, drop_fields = [], start_step = 0):
 	#Pull best hypers out of the database
 	client = pymongo.MongoClient()
 	db = client.creeval
@@ -153,7 +153,7 @@ def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, trai
 				print "Generating conceptual space for",domain_name,"using",metadata['model_class']+"."
 				cs = globals()[metadata['model_class']](domain_name, datapath,selected_hypers=metadata["best_hypers"])
 				# Inspect the model
-				cs.stepwise_inspect(metadata, override_query, sample_size=sample_size)
+				cs.stepwise_inspect(metadata, override_query, sample_size=sample_size, start_step=start_step)
 			else:
 				print "Need valid pretrain_start, pretrain_stop, time_stop and time_slice parameters to train a model."
 		else:
@@ -183,6 +183,7 @@ if __name__ == "__main__":
 	parser.add_argument("-c","--time_slice",help="The amount of time between each expectation-training step.",required=False,type=float,default=None)
 
 	#Args for unex
+	parser.add_argument("-p","--starting_step",help="The step at which to start calculating unexpectedness.",required=False,default=0, type=int)
 
 	args = parser.parse_args()
 	collname = args.dataset
@@ -208,4 +209,4 @@ if __name__ == "__main__":
 		train_expectations(collname, pretrain_start = args.pretrain_start, pretrain_stop = args.pretrain_stop, train_stop = args.train_stop, time_slice = args.time_slice, datapath = p, override_query=override_query, drop_fields = ignore_fields, training_epochs = args.epochs, sample_limit=args.sample_limit)
 	elif args.mode == "unex":
 		print "Initiating unexpectedness evaluation of",args.exp_name+"."
-		unexpectedness(collname, pretrain_start = args.pretrain_start, pretrain_stop = args.pretrain_stop, train_stop = args.train_stop, time_slice = args.time_slice, datapath = os.path.join("data/",collname,args.exp_name), override_query=override_query, drop_fields = ignore_fields, sample_size=args.sample_limit)
+		unexpectedness(collname, pretrain_start = args.pretrain_start, pretrain_stop = args.pretrain_stop, train_stop = args.train_stop, time_slice = args.time_slice, datapath = os.path.join("data/",collname,args.exp_name), override_query=override_query, drop_fields = ignore_fields, sample_size=args.sample_limit, start_step=args.starting_step)
