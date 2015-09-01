@@ -250,13 +250,13 @@ class ConceptualSpace():
 				samp = train_ddm.X[np.random.randint(train_ddm.X.shape[0]),:]
 				self.data_samples.append(samp)
 				print samp
-			params["train_stop"] = train_ddm.X.shape[0]
 		#scaler = pickle.load(open(domain_name+"_scaler.pkl","rb"))
 		DUconfig.dataset = train_ddm
 		DUconfig.test_dataset = test_ddm
 		params = self.hypers
 		params.update(self.fixed_hypers)
-
+		if q is not None:
+			params["train_stop"] = train_ddm.X.shape[0]
 		params['save_path'] = os.path.join(self.scratch_path,"step_0")
 		params['yaml_path'] = params['yaml_path'].lstrip("./") #The existing yaml_path starts with "../../" in order to get out of the spearmint dir.
 		result = self.run(test_ddm,params,logging=True, cv=False)
@@ -1483,8 +1483,8 @@ class LSTMConceptualSpace(ConceptualSpace):
 
 
 class VAEConceptualSpace(ConceptualSpace):
-	fixed_hypers = {"batch_size": 100,
-					"monitoring_batch_size": 100,
+	fixed_hypers = {"batch_size": 500,
+					"monitoring_batch_size": 500,
 					"save_path": ".",
 					"yaml_path": "../../../../model_yamls/",
 					"layer_fn": "vae",
@@ -1659,11 +1659,8 @@ class VAEConceptualSpace(ConceptualSpace):
 
 		if 'model' in dir(train):
 			self.model = train.model
-			print dir(train)
 			if data==None:
 				data = train.dataset
-				print data
-				print dir(data)
 			obj = train.model.monitor.channels['test_objective'].val_record[-1] #This is a single Train object with no k-fold CV happening.
 			objectives_by_layer.append([float(i) for i in train.model.monitor.channels['test_objective'].val_record])
 
@@ -1707,8 +1704,6 @@ class VAEConceptualSpace(ConceptualSpace):
 		else:
 			if data==None:
 				data = train.dataset_iterator.dataset
-				print data
-				print dir(data)
 
 			obj = np.mean([i.model.monitor.channels['test_objective'].val_record[-1] for i in train.trainers]) #This is a TrainCV object that's doing k-fold CV.
 			objectives_by_layer.append([float(j) for j in np.mean([i.model.monitor.channels['test_objective'].val_record for i in train.trainers],axis=0)])

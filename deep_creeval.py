@@ -159,6 +159,10 @@ def train_holistic_expectations(domain_name, datapath="data/", hypers_from_file=
 			if update_metadata:
 				metadata["fields_x"] = original_fields_x
 				metadata["fields_y"] = original_fields_y
+				if metadata["pretrain_start"] == None:
+					del metadata["pretrain_start"]
+				if metadata["pretrain_stop"] == None:
+					del metadata["pretrain_stop"]
 				escape_mongo(metadata)
 				db.datasets.save(metadata)
 		else:
@@ -288,7 +292,7 @@ if __name__ == "__main__":
 		if args.pretrain_start is not None:
 			train_expectations(collname, pretrain_start = args.pretrain_start, pretrain_stop = args.pretrain_stop, train_stop = args.train_stop, time_slice = args.time_slice, datapath = p, override_query=override_query, drop_fields = ignore_fields, training_epochs = args.epochs, sample_limit=args.sample_limit, bypass_mongo=args.bypass_mongo)
 		else:
-			train_holistic_expectations(collname, datapath = p, override_query=override_query, drop_fields = ignore_fields, training_epochs = args.epochs, sample_limit=args.sample_limit)
+			train_holistic_expectations(collname, datapath = p, override_query=override_query, drop_fields = ignore_fields, training_epochs = args.epochs, sample_limit=args.sample_limit, bypass_mongo=args.bypass_mongo)
 	elif args.mode == "unex":
 		print "Initiating trend unexpectedness evaluation of",args.exp_name+"."
 		unexpectedness(collname, pretrain_start = args.pretrain_start, pretrain_stop = args.pretrain_stop, train_stop = args.train_stop, time_slice = args.time_slice, datapath = os.path.join("data/",collname,args.exp_name), override_query=override_query, drop_fields = ignore_fields, sample_size=args.sample_limit, start_step=args.starting_step, bypass_mongo=args.bypass_mongo)
