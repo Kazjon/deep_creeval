@@ -1,0 +1,78 @@
+!obj:pylearn2.cross_validation.TrainCV {
+    dataset_iterator:  !obj:pylearn2.cross_validation.dataset_iterators.DatasetKFold {
+        dataset: &train !obj:pylearn2.datasets.binarized_mnist.BinarizedMNIST {
+            which_set: 'train',
+        },
+        n_folds: %(n_folds)i,
+        shuffle: True
+    },
+    model: !obj:pylearn2.models.vae.VAE {
+        nvis : 784,
+        nhid : %(nhid)i,
+        prior: !obj:pylearn2.models.vae.prior.DiagonalGaussianPrior {},
+        conditional: !obj:pylearn2.models.vae.conditional.BernoulliVector {
+            name: 'conditional',
+            mlp: !obj:pylearn2.models.mlp.MLP {
+                layers: [
+                    !obj:pylearn2.models.mlp.RectifiedLinear {
+                        layer_name: 'h_1',
+                        dim: %(nhid_mlp2)i,
+                        irange: 0.001,
+                    },
+                    !obj:pylearn2.models.mlp.RectifiedLinear {
+                        layer_name: 'h_2',
+                        dim: %(nhid_mlp1)i,
+                        irange: 0.001,
+                    },
+                ],
+            },
+        },
+        posterior: !obj:pylearn2.models.vae.conditional.DiagonalGaussian {
+            name: 'posterior',
+            mlp: !obj:pylearn2.models.mlp.MLP {
+                layers: [
+                    !obj:pylearn2.models.mlp.RectifiedLinear {
+                        layer_name: 'h_1',
+                        dim: %(nhid_mlp1)i,
+                        irange: 0.001,
+                    },
+                    !obj:pylearn2.models.mlp.RectifiedLinear {
+                        layer_name: 'h_2',
+                        dim: %(nhid_mlp2)i,
+                        irange: 0.001,
+                    },
+                ],
+            },
+        },
+    },
+    algorithm: !obj:pylearn2.training_algorithms.sgd.SGD {
+        batch_size: %(batch_size)i,
+        learning_rate: %(learn_rate)f,
+        learning_rule: !obj:pylearn2.training_algorithms.learning_rule.Momentum {
+            init_momentum: %(mom_init)f,
+        },
+        monitoring_batch_size : %(monitoring_batch_size)i,
+        monitoring_dataset : *train,
+        cost: !obj:pylearn2.costs.vae.VAECriterion {
+            num_samples: 1,
+        },
+        termination_criterion: !obj:pylearn2.termination_criteria.EpochCounter {
+            max_epochs: %(max_epochs)i,
+        },
+        update_callbacks: [
+            !obj:pylearn2.training_algorithms.sgd.ExponentialDecay {
+                decay_factor: 1.00005,
+                min_lr:       0.00001
+            },
+        ],
+    },
+    save_path: "%(save_path)s/%(layer_fn)s_l1.pkl",
+    save_freq: 1,
+    extensions: [
+        !obj:pylearn2.training_algorithms.learning_rule.MomentumAdjustor {
+            final_momentum: %(mom_fin)f,
+            start: 1,
+            saturate: %(max_epochs)i
+        },
+    ],
+}
