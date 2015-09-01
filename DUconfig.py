@@ -3,7 +3,14 @@
 #   our data multiple times for training and testing different layers.
 
 dataset = []
+test_dataset = []
 costs = []
+
+def get_train_dataset():
+	return dataset
+
+def get_test_dataset():
+	return test_dataset
 
 def get_dataset():
 	return dataset

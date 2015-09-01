@@ -22,7 +22,6 @@ def escape_mongo(metadata):
 			metadata["__"+k.lstrip("$")] = metadata[k]
 			del metadata[k]
 
-
 #Reverse the escape character nonsense we had to put in the DB -- mongo keys can't start with $, we replaced with __
 def unescape_mongo(metadata):
 	for k in metadata.keys():
@@ -38,7 +37,7 @@ def unescape_mongo(metadata):
 
 
 # Runs spearmint on a given domain and saves the best hypers for future use
-def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.05, 'datapath': "data/"}, hypers_to_file=True, override_query = {}, drop_fields = [], sample_limit = 0, training_epochs = 10):
+def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.05, 'datapath': "data/"}, hypers_to_file=True, override_query = {}, drop_fields = [], sample_limit = 0, training_epochs = 10, bypass_mongo=False):
 
 	spearmint_params["datapath"] = os.path.join(spearmint_params["datapath"],"hyper_fitting")
 
@@ -48,6 +47,8 @@ def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.
 	metadata = db.datasets.find_one({"name": domain_name})
 
 	if metadata is not None:
+		if bypass_mongo:
+			metadata["query"] = None
 		unescape_mongo(metadata)
 
 		cs = globals()[metadata['model_class']](domain_name, spearmint_params['datapath'], max_epochs = training_epochs)
@@ -69,7 +70,7 @@ def fit_hypers(domain_name, spearmint_params = {"look_back": 5,"stop_thresh": 0.
 		print "Could not find a record for the dataset",domain_name,"in the database."
 
 # Builds the deep learning model over each timeslice of the data, saving successive states to the database
-def train_expectations(domain_name,pretrain_start = None, pretrain_stop = None, train_stop = None, time_slice = None, datapath="data/", hypers_from_file=True, steps_to_file=True, override_query = {}, drop_fields = [], training_epochs = 10, sample_limit=0):
+def train_expectations(domain_name,pretrain_start = None, pretrain_stop = None, train_stop = None, time_slice = None, datapath="data/", hypers_from_file=True, steps_to_file=True, override_query = {}, drop_fields = [], training_epochs = 10, sample_limit=0, bypass_mongo=False):
 	#Pull best hypers out of the database
 	client = pymongo.MongoClient()
 	db = client.creeval
@@ -122,14 +123,59 @@ def train_expectations(domain_name,pretrain_start = None, pretrain_stop = None, 
 	else:
 		print "Could not find a record for the dataset",domain_name,"in the database."
 
-# Measures the unexpectedness of a given saved model.
-def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, train_stop = None, time_slice = None, sample_size= 50000, datapath="data/", steps_from_file=True, override_query = {}, drop_fields = [], start_step = 0):
+# Builds the deep learning model over each timeslice of the data, saving successive states to the database
+def train_holistic_expectations(domain_name, datapath="data/", hypers_from_file=True, update_metadata=True, override_query = {}, drop_fields = [], steps_to_file=True, training_epochs = None, sample_limit=0, bypass_mongo=False):
 	#Pull best hypers out of the database
 	client = pymongo.MongoClient()
 	db = client.creeval
 	metadata = db.datasets.find_one({"name": domain_name})
 
 	if metadata is not None:
+		if bypass_mongo:
+			metadata["query"] = None
+		#Use the previously-fit hypers to train a single model with the provided timeslices (or ones from the data)
+		if hypers_from_file:
+			with open(os.path.join(datapath,"../hyper_fitting/hypers.txt")) as f:
+				metadata["best_hypers"] = json.load(f)
+		unescape_mongo(metadata)
+		if "best_hypers" in metadata.keys():
+			original_fields_x = metadata["fields_x"]
+			original_fields_y = metadata["fields_y"]
+			metadata["fields_x"] = [f for f in metadata['fields_x'] if f not in drop_fields]
+			metadata["fields_y"] = [f for f in metadata['fields_y'] if f not in drop_fields]
+			cs = globals()[metadata['model_class']](domain_name, datapath,selected_hypers=metadata["best_hypers"], max_epochs = training_epochs)
+			# Fit the initial model
+			pretrain_result = cs.pretrain(metadata, override_query, sample_limit)
+			if ["pretrain_start"] in metadata.keys() and metadata["pretrain_start"] is None:
+				del metadata["pretrain_start"]
+			if ["pretrain_stop"] in metadata.keys() and metadata["pretrain_stop"] is None:
+				del metadata["pretrain_stop"]
+			metadata["steps"] = [pretrain_result]
+
+			if steps_to_file:
+				with open(os.path.join(datapath,"steps.txt"),"w") as f:
+					json.dump(metadata['steps'], f, sort_keys=True, indent=4, ensure_ascii=False)
+
+			if update_metadata:
+				metadata["fields_x"] = original_fields_x
+				metadata["fields_y"] = original_fields_y
+				escape_mongo(metadata)
+				db.datasets.save(metadata)
+		else:
+			print "The database",domain_name,"does not contain fitted hyperparameters.  Run fit_hypers() on it first."
+	else:
+		print "Could not find a record for the dataset",domain_name,"in the database."
+
+# Measures the trend-based unexpectedness of a given saved model.
+def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, train_stop = None, time_slice = None, sample_size= 50000, datapath="data/", steps_from_file=True, override_query = {}, drop_fields = [], start_step = 0, bypass_mongo=False):
+	#Pull best hypers out of the database
+	client = pymongo.MongoClient()
+	db = client.creeval
+	metadata = db.datasets.find_one({"name": domain_name})
+
+	if metadata is not None:
+		if bypass_mongo:
+			metadata["query"] = None
 		#Use the previously-trained expectation model to investigate changes in the dataset.
 		if steps_from_file:
 			with open(os.path.join(datapath,"steps.txt")) as f:
@@ -161,13 +207,43 @@ def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, trai
 	else:
 		print "Could not find a record for the dataset",domain_name,"in the database."
 
+# Measures the feature-based unexpectedness of a given saved model.
+def feature_unexpectedness(domain_name, datapath="data/", steps_from_file=True, override_query = {}, drop_fields = [], bypass_mongo=False):
+	#Pull best hypers out of the database
+	client = pymongo.MongoClient()
+	db = client.creeval
+	metadata = db.datasets.find_one({"name": domain_name})
+
+	if metadata is not None:
+		#Use the previously-trained expectation model to investigate changes in the dataset.
+		if steps_from_file:
+			with open(os.path.join(datapath,"steps.txt")) as f:
+				metadata["steps"] = json.load(f)
+		unescape_mongo(metadata)
+		if "best_hypers" in metadata.keys():
+			original_fields_x = metadata["fields_x"]
+			original_fields_y = metadata["fields_y"]
+			metadata["fields_x"] = [f for f in metadata['fields_x'] if f not in drop_fields]
+			metadata["fields_y"] = [f for f in metadata['fields_y'] if f not in drop_fields]
+			print "Generating conceptual space for",domain_name,"using",metadata['model_class']+"."
+			cs = globals()[metadata['model_class']](domain_name, datapath,selected_hypers=metadata["best_hypers"])
+			cs.load(metadata["steps"][0]["model_files"][0])
+			cs.init_model_functions()
+			# Inspect the model
+			cs.featurewise_inspect(metadata, override_query)
+		else:
+			print "The database",domain_name,"does not contain fitted hyperparameters.  Run fit_hypers() on it first."
+	else:
+		print "Could not find a record for the dataset",domain_name,"in the database."
+
 if __name__ == "__main__":
 	print "Started creeval."
 	parser = argparse.ArgumentParser(description='Use this to run creeval and discovery temporal unexpectedness at the domain level')
 	parser.add_argument('dataset',help="Name of the dataset to work with")
-	parser.add_argument('-e','--epochs',help="How many epochs to train for",required=False, type=int, default=10)
-	parser.add_argument('-m','--mode',choices=["fit_hypers",'train_exp',"unex"], help="Run the creeval step you're interested in.",required=False)
+	parser.add_argument('-e','--epochs',help="How many epochs to train for",required=False, type=int, default=None)
+	parser.add_argument('-m','--mode',choices=["fit_hypers",'train_exp',"unex", "unex_fwise"], help="Run the creeval step you're interested in.",required=False)
 	parser.add_argument('-i','--sample_limit',help="How many samples to pull from the dataset (every mode)",type=int, required=False,default=0)
+	parser.add_argument('-b','--bypass_mongo',help="Bypass mongo (load the data through the yaml or elsewhere)",action='store_true')
 
 	#Args for fit_hypers
 	parser.add_argument('-l','--look_back',help="How many steps to look back for determining spearmint stall",type=int, required=False, default=3)
@@ -187,26 +263,35 @@ if __name__ == "__main__":
 
 	args = parser.parse_args()
 	collname = args.dataset
-	#ten_species = ['Zenaida_macroura', 'Corvus_brachyrhynchos', 'Cardinalis_cardinalis', 'Turdus_migratorius', 'Cyanocitta_cristata', 'Spinus_tristis', 'Sturnus_vulgaris', 'Melospiza_melodia', 'Agelaius_phoeniceus', 'Picoides_pubescens']
-	#collname = "ebird_top10_2008_2012"
-	ignore_fields = ["LATITUDE","LONGITUDE",'Zenaida_macroura', 'Corvus_brachyrhynchos', 'Cardinalis_cardinalis', 'Cyanocitta_cristata', 'Spinus_tristis', 'Sturnus_vulgaris', 'Melospiza_melodia', 'Agelaius_phoeniceus', 'Picoides_pubescens']
-
-	species = ['Turdus_migratorius']
 	query = {}
-	for s in species:
-		query[s] = {"$gt": 0}
 	override_query = {}
-	override_query["$or"] = [{k:query[k]} for k in query.keys()]
+	ignore_fields = []
+	#if "ebird" in args.dataset:
+	#	#ten_species = ['Zenaida_macroura', 'Corvus_brachyrhynchos', 'Cardinalis_cardinalis', 'Turdus_migratorius', 'Cyanocitta_cristata', 'Spinus_tristis', 'Sturnus_vulgaris', 'Melospiza_melodia', 'Agelaius_phoeniceus', 'Picoides_pubescens']
+	#	#collname = "ebird_top10_2008_2012"
+	#	ignore_fields = ["LATITUDE","LONGITUDE",'Zenaida_macroura', 'Corvus_brachyrhynchos', 'Cardinalis_cardinalis', 'Cyanocitta_cristata', 'Spinus_tristis', 'Sturnus_vulgaris', 'Melospiza_melodia', 'Agelaius_phoeniceus', 'Picoides_pubescens']
+	#
+	#	species = ['Turdus_migratorius']
+	#	for s in species:
+	#		query[s] = {"$gt": 0}
+	#	override_query["$or"] = [{k:query[k]} for k in query.keys()]
+
 
 	if args.mode == "fit_hypers":
 		print "Initiating hyperparameter fit on",collname+"."
-		fit_hypers(collname,spearmint_params = {"look_back": args.look_back,"stop_thresh": args.stop_thresh, 'datapath': os.path.join("data/",collname)},override_query=override_query, drop_fields = ignore_fields, sample_limit=args.sample_limit, training_epochs = args.epochs)
+		fit_hypers(collname,spearmint_params = {"look_back": args.look_back,"stop_thresh": args.stop_thresh, 'datapath': os.path.join("data/",collname)},override_query=override_query, drop_fields = ignore_fields, sample_limit=args.sample_limit, training_epochs = args.epochs, bypass_mongo=args.bypass_mongo)
 	elif args.mode == "train_exp":
 		print "Initiating expectation training on",args.exp_name+"."
 		p = os.path.join("data/",collname,args.exp_name)
 		if not os.path.exists(p):
 			os.makedirs(p)
-		train_expectations(collname, pretrain_start = args.pretrain_start, pretrain_stop = args.pretrain_stop, train_stop = args.train_stop, time_slice = args.time_slice, datapath = p, override_query=override_query, drop_fields = ignore_fields, training_epochs = args.epochs, sample_limit=args.sample_limit)
+		if args.pretrain_start is not None:
+			train_expectations(collname, pretrain_start = args.pretrain_start, pretrain_stop = args.pretrain_stop, train_stop = args.train_stop, time_slice = args.time_slice, datapath = p, override_query=override_query, drop_fields = ignore_fields, training_epochs = args.epochs, sample_limit=args.sample_limit, bypass_mongo=args.bypass_mongo)
+		else:
+			train_holistic_expectations(collname, datapath = p, override_query=override_query, drop_fields = ignore_fields, training_epochs = args.epochs, sample_limit=args.sample_limit)
 	elif args.mode == "unex":
-		print "Initiating unexpectedness evaluation of",args.exp_name+"."
-		unexpectedness(collname, pretrain_start = args.pretrain_start, pretrain_stop = args.pretrain_stop, train_stop = args.train_stop, time_slice = args.time_slice, datapath = os.path.join("data/",collname,args.exp_name), override_query=override_query, drop_fields = ignore_fields, sample_size=args.sample_limit, start_step=args.starting_step)
+		print "Initiating trend unexpectedness evaluation of",args.exp_name+"."
+		unexpectedness(collname, pretrain_start = args.pretrain_start, pretrain_stop = args.pretrain_stop, train_stop = args.train_stop, time_slice = args.time_slice, datapath = os.path.join("data/",collname,args.exp_name), override_query=override_query, drop_fields = ignore_fields, sample_size=args.sample_limit, start_step=args.starting_step, bypass_mongo=args.bypass_mongo)
+	elif args.mode == "unex_fwise":
+		print "Initiating featurewise unexpectedness evaluation of",args.exp_name+"."
+		feature_unexpectedness(collname, datapath = os.path.join("data/",collname,args.exp_name), override_query=override_query, drop_fields = ignore_fields, bypass_mongo=args.bypass_mongo)
