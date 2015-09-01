@@ -64,7 +64,7 @@
     extensions: [
         !obj:pylearn2.training_algorithms.learning_rule.MomentumAdjustor {
             final_momentum: %(mom_fin)f,
-            start: 1,
+            start: 5,
             saturate: 15,
         },
     ],
