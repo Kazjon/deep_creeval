@@ -51,7 +51,7 @@
           test: !obj:DUconfig.get_test_dataset {},
         },
         cost: !obj:pylearn2.costs.vae.VAECriterion {
-            num_samples: 10,
+            num_samples: 1,
         },
         termination_criterion: !obj:pylearn2.termination_criteria.EpochCounter {
             max_epochs: %(max_epochs)i,
@@ -69,7 +69,7 @@
         !obj:pylearn2.training_algorithms.learning_rule.MomentumAdjustor {
             final_momentum: %(mom_fin)f,
             start: 5,
-            saturate: 50,
+            saturate: 20,
         },
     ],
 }

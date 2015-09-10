@@ -212,7 +212,7 @@ def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, trai
 		print "Could not find a record for the dataset",domain_name,"in the database."
 
 # Measures the feature-based unexpectedness of a given saved model.
-def feature_unexpectedness(domain_name, datapath="data/", steps_from_file=True, override_query = {}, drop_fields = [], bypass_mongo=False):
+def feature_unexpectedness(domain_name, datapath="data/", steps_from_file=True, override_query = {}, drop_fields = [], bypass_mongo=False, start=0, stop=-1):
 	#Pull best hypers out of the database
 	client = pymongo.MongoClient()
 	db = client.creeval
@@ -234,7 +234,10 @@ def feature_unexpectedness(domain_name, datapath="data/", steps_from_file=True, 
 			cs.load(metadata["steps"][0]["model_files"][0])
 			cs.init_model_functions()
 			# Inspect the model
-			cs.featurewise_inspect(metadata, override_query)
+			#cs.featurewise_inspect(metadata, override_query, n_iter=10)
+			#cs.featurewise_inspect(metadata, override_query, n_iter=20)
+			#cs.featurewise_inspect(metadata, override_query, n_iter=50)
+			cs.evaluate_data_surprise(metadata, override_query, start=start,stop=stop)
 		else:
 			print "The database",domain_name,"does not contain fitted hyperparameters.  Run fit_hypers() on it first."
 	else:
@@ -264,6 +267,9 @@ if __name__ == "__main__":
 
 	#Args for unex
 	parser.add_argument("-p","--starting_step",help="The step at which to start calculating unexpectedness.",required=False,default=0, type=int)
+
+	#Args for unex_fwise
+	parser.add_argument("-k","--skip",help="The number of examples to skip when evaluating the data", required=False,type=int,default=0)
 
 	args = parser.parse_args()
 	collname = args.dataset
@@ -298,4 +304,4 @@ if __name__ == "__main__":
 		unexpectedness(collname, pretrain_start = args.pretrain_start, pretrain_stop = args.pretrain_stop, train_stop = args.train_stop, time_slice = args.time_slice, datapath = os.path.join("data/",collname,args.exp_name), override_query=override_query, drop_fields = ignore_fields, sample_size=args.sample_limit, start_step=args.starting_step, bypass_mongo=args.bypass_mongo)
 	elif args.mode == "unex_fwise":
 		print "Initiating featurewise unexpectedness evaluation of",args.exp_name+"."
-		feature_unexpectedness(collname, datapath = os.path.join("data/",collname,args.exp_name), override_query=override_query, drop_fields = ignore_fields, bypass_mongo=args.bypass_mongo)
+		feature_unexpectedness(collname, datapath = os.path.join("data/",collname,args.exp_name), override_query=override_query, drop_fields = ignore_fields, bypass_mongo=args.bypass_mongo, start=args.skip,stop=args.sample_limit)

@@ -52,7 +52,7 @@
         monitoring_batch_size : %(monitoring_batch_size)i,
         monitoring_dataset : *train,
         cost: !obj:pylearn2.costs.vae.VAECriterion {
-            num_samples: 1,
+            num_samples: 10,
         },
         termination_criterion: !obj:pylearn2.termination_criteria.EpochCounter {
             max_epochs: %(max_epochs)i,
