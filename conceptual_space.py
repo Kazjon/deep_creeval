@@ -2166,14 +2166,13 @@ class VAEConceptualSpace(ConceptualSpace):
 		for design in data_slice:
 			record = cursor.next()
 			print record
-			if not "surprise_sets" in record.keys():
-				d = self.binarise_features(self.features_from_design_vector(design))
-				print "Surprising combinations in",d," (from data):"
-				s = self.surprising_sets(d, threshold=threshold, n_samples=sample_sizes, depth_limit = depth_limit, beam_width=len(d)*depth_limit)
-				self.print_surprise(s)
-				record["surprise_sets"] = [{"discovery":k.discovery,"context":list(k.context),"value":v} for k,v in s.iteritems()]
-				record["max_surprise"] = self.max_surprise(s)
-				coll2.save(record)
+			d = self.binarise_features(self.features_from_design_vector(design))
+			print "Surprising combinations in",d," (from data):"
+			s = self.surprising_sets(d, threshold=threshold, n_samples=sample_sizes, depth_limit = depth_limit, beam_width=len(d)*depth_limit)
+			self.print_surprise(s)
+			record["surprise_sets"] = [{"discovery":k.discovery,"context":list(k.context),"value":v} for k,v in s.iteritems()]
+			record["max_surprise"] = self.max_surprise(s)
+			coll2.save(record)
 
 
 
