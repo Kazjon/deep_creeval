@@ -237,7 +237,7 @@ def feature_unexpectedness(domain_name, datapath="data/", steps_from_file=True, 
 			#cs.featurewise_inspect(metadata, override_query, n_iter=10)
 			#cs.featurewise_inspect(metadata, override_query, n_iter=20)
 			#cs.featurewise_inspect(metadata, override_query, n_iter=50)
-			cs.evaluate_data_surprise(metadata, override_query, start=start,stop=stop)
+			#cs.evaluate_data_surprise(metadata, override_query, start=start,stop=stop)
 		else:
 			print "The database",domain_name,"does not contain fitted hyperparameters.  Run fit_hypers() on it first."
 	else:

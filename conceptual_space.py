@@ -26,6 +26,7 @@ import scipy.stats
 import theano.tensor as T
 import theano
 import heapq
+import pymongo
 
 import pandas as pd
 from pandas.tools.plotting import radviz
@@ -2156,7 +2157,6 @@ class VAEConceptualSpace(ConceptualSpace):
 		self.metadata = metadata
 		data_slice = monary_load(self.domain_name,metadata["fields_x"],metadata["fields_y"],find_args=q, split = None, start=start, stop=stop, type=self.fixed_hypers["monary_type"]).X
 
-		import pymongo
 		client = pymongo.MongoClient()
 		db = client.creeval
 		coll = db[metadata["name"]]
