@@ -2148,7 +2148,7 @@ class VAEConceptualSpace(ConceptualSpace):
 					openlist = heapq.nsmallest(beam_width,openlist)
 		return foundlist
 
-	def evaluate_data_surprise(self, metadata, override_query, sample_sizes = 10000, n_iter=50, start=0,stop=-1, threshold=2, depth_limit=3):
+	def evaluate_data_surprise(self, metadata, override_query, sample_sizes = 1000, n_iter=50, start=0,stop=-1, threshold=2, depth_limit=3):
 		if len(override_query.keys()):
 			q = override_query
 		else:
@@ -2160,6 +2160,7 @@ class VAEConceptualSpace(ConceptualSpace):
 		client = pymongo.MongoClient()
 		db = client.creeval
 		coll = db[metadata["name"]]
+		coll2 = db[metadata["name"]+"_evals"]
 		cursor = coll.find(q, skip=start, limit=stop)
 
 		for design in data_slice:
@@ -2168,10 +2169,11 @@ class VAEConceptualSpace(ConceptualSpace):
 			if not "surprise_sets" in record.keys():
 				d = self.binarise_features(self.features_from_design_vector(design))
 				print "Surprising combinations in",d," (from data):"
-				record["surprise_sets"] = self.surprising_sets(d, threshold=threshold, n_samples=1000, depth_limit = depth_limit, beam_width=len(d)*depth_limit)
-				self.print_surprise(record["surprise_sets"])
-				record["max_surprise"] = self.max_surprise(record["surprise_sets"])
-				coll.save(record)
+				s = self.surprising_sets(d, threshold=threshold, n_samples=sample_sizes, depth_limit = depth_limit, beam_width=len(d)*depth_limit)
+				self.print_surprise(s)
+				record["surprise_sets"] = [{"discovery":k.discovery,"context":list(k.context),"value":v} for k,v in s.iteritems()]
+				record["max_surprise"] = self.max_surprise(s)
+				coll2.save(record)
 
 
 
