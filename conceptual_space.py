@@ -1546,7 +1546,175 @@ class VAEConceptualSpace(ConceptualSpace):
 		return (reconstructed_X, self.model.means_from_theta(theta), epsilon, phi[0], phi[1], z, theta[0])
 
 
-	def featurewise_inspect(self,metadata,override_query, sample_sizes = 10000, n_iter=1000):
+	def featurewise_inspect(self,metadata,override_query, sample_sizes = 10000, n_iter=100):
+		self.metadata = metadata
+		threshold = 2
+		depth_limit = 3
+		n_reform_samples = 100
+		n_reform_iter = 10
+		reform_drop = False
+		prefix = "i_"
+		Surprise = namedtuple("Surprise",("discovery","context"))
+
+		bacon_cupcake = ["sugar", "butter", "flour", "bacon", "cocoa", "salt", "eggs", "baking powder"]
+		bacon_cupcake = [prefix+i for i in bacon_cupcake]
+		southwest_riblets = ['i_chocolate', 'i_apple cider vinegar', 'i_onions', 'i_sugar', 'i_water', 'i_garlic', 'i_chillies', 'i_salt', 'i_vegetable oil', "i_pork"]
+		bacon_pasta = ['i_pecans', 'i_dill', 'i_cheese', 'i_salt', 'i_eggs', 'i_black pepper', 'i_bacon', 'i_parmesan', 'i_butter', 'i_vodka', 'i_pasta', 'i_white wine']
+		velvet_salad = ['i_mixed nuts', 'i_water', 'i_cream cheese', 'i_whipped cream', 'i_cherries', 'i_celery', "i_gelatin"]
+		meatlessloaf = ['i_cottage cheese', 'i_onions', 'i_eggs', 'i_rice', 'i_peanuts', 'i_black pepper', 'i_salt', 'i_olive oil']
+		dilly_muffins = ['i_sugar', 'i_ricotta', 'i_baking powder', 'i_margarine', 'i_eggs', 'i_flour', 'i_zucchini', 'i_dill', 'i_salt', 'i_milk']
+		bloody_mary = ['i_worcestershire sauce', 'i_lemon', 'i_black pepper', 'i_salt', 'i_vodka', 'i_tomatoes']
+
+
+        #{Surprise(discovery='i_pork', context=frozenset(["i_chocolate", "i_salt", "i_sugar"])):10.8},
+
+		triggers = [meatlessloaf,bloody_mary,velvet_salad, dilly_muffins]
+		surps = [{Surprise(discovery='i_cottage cheese', context=frozenset(['i_peanuts', 'i_eggs', 'i_onions'])):9.8},
+				 {Surprise(discovery='i_worcestershire sauce', context=frozenset(["i_tomatoes", "i_vodka"])):13.},
+				 {Surprise(discovery='i_celery', context=frozenset(['i_whipped cream', 'i_cherries', 'i_cream cheese'])):11.4},
+				 {Surprise(discovery='i_dill', context=frozenset(['i_margarine', 'i_ricotta', 'i_zucchini'])):15.5}]
+
+		triggers = triggers[2:]
+		surps = surps[2:]
+
+		for trigger,surp in zip(triggers,surps):
+			print "Surprising combinations in",trigger," (from prompt):"
+			#s = self.surprising_sets(trigger, threshold=threshold, n_samples=1000, depth_limit = depth_limit, beam_width=None)
+			#self.print_surprise(s)
+			#sys.exit()
+			#s = {Surprise(discovery='i_bacon', context=frozenset(['i_cocoa', 'i_butter', "i_sugar"])):10.8}
+			#s = {Surprise(discovery='i_celery', context=frozenset(['i_whipped cream', 'i_cherries', 'i_cream cheese'])):11.4}
+			#s = {Surprise(discovery='i_black pepper', context=frozenset(['i_peanuts', 'i_eggs', 'i_olive oil'])):15.5}
+			#s = {Surprise(discovery='i_dill', context=frozenset(['i_margarine', 'i_ricotta', 'i_zucchini'])):15.5}
+			print "using saved surprise sets:"
+			self.print_surprise(surp)
+			self.reformulation_test(surp, n_reform_samples,n_reform_iter,reform_drop,depth_limit,threshold)
+
+		sys.exit()
+		if len(override_query.keys()):
+			q = override_query
+		else:
+			q = deepcopy(metadata["query"])
+		train_data, test_data = monary_load(self.domain_name,metadata["fields_x"],metadata["fields_y"],find_args=q, split = 0.9, shuffle_split=True, type=self.fixed_hypers["monary_type"])
+		all_data = np.vstack((train_data.X,test_data.X))
+		data_means = np.array(all_data).mean(axis=0)
+
+		print "   --- Data loaded."
+
+		samples_to_print = 3
+
+		print "---------SAMPLES FROM DATA:---------"
+		self.data_samples = []
+		for i in range(samples_to_print):
+			samp = all_data[np.random.randint(all_data.shape[0]),:]
+			self.data_samples.append(samp)
+			print self.binarise_features(self.features_from_design_vector(samp), 0)
+		print "------------------------------------"
+
+		R = self.model.sample(sample_sizes, return_sample_means=False)
+		_sample = theano.function([],R)
+		sampled_designs = _sample()
+		sample_means = np.array(sampled_designs).mean(axis=0)
+
+		print "---------SAMPLES FROM MODEL:---------"
+		for i in range(samples_to_print):
+			samp = sampled_designs[np.random.randint(sampled_designs.shape[0]),:]
+			print self.binarise_features(self.features_from_design_vector(samp), 0)
+		print "------------------------------------"
+
+		#self.co_occurence_matrix(outpath="co_occurence.csv")
+
+
+
+		max_data_surps = []
+		for s in self.data_samples:
+			d = self.binarise_features(self.features_from_design_vector(s))
+			print "Surprising combinations in",d," (from data):"
+			s = self.surprising_sets(d, threshold=threshold, n_samples=1000, depth_limit = depth_limit, beam_width=len(d))
+			self.print_surprise(s)
+			max, best = self.max_surprise(s, return_best=True)
+			max_data_surps.append(max)
+			self.reformulation_test(s, n_reform_samples,n_reform_iter,reform_drop,depth_limit,threshold)
+
+		print max_data_surps
+
+		max_model_surps = []
+		for i in range(len(self.data_samples)):
+			s = sampled_designs[np.random.randint(sampled_designs.shape[0]),:]
+			d = self.binarise_features(self.features_from_design_vector(s))
+			print "Surprising combinations in",d," (from model):"
+			s = self.surprising_sets(d, threshold=threshold, n_samples=1000, depth_limit = depth_limit, beam_width=len(d))
+			self.print_surprise(s)
+			max, best = self.max_surprise(s, return_best=True)
+			max_model_surps.append(max)
+			self.reformulation_test(s, n_reform_samples,n_reform_iter,reform_drop,depth_limit,threshold)
+
+		print max_model_surps
+
+		print "Mean surprise from data was {0} w/ sigma {1}. Mean surprise from model was {2} w/ sigma {3}.".format(np.mean(max_data_surps,axis=0),np.std(max_data_surps,axis=0),np.mean(max_model_surps,axis=0),np.std(max_model_surps,axis=0))
+
+	def reformulation_test(self,s, n_reform_samples,n_reform_iter,reform_drop,depth_limit,threshold, replication=True,same_context=True,same_discovery=True):
+		max, best = self.max_surprise(s, return_best=True)
+		if best is not None:
+			if replication:
+				print "  Generating with replication reformulation using",best
+				count = 0
+				cond = [best.discovery]+list(best.context)
+				while count < n_reform_samples:
+					designs= self.synthesise_with_reformulation(best,reform_type="replicate", n_samples=1000,n_iter=n_reform_iter, drop_bad=reform_drop)
+					for des in designs:
+						d = self.binarise_features(self.features_from_design_vector(des))
+						if all([c in d for c in cond]):
+							print
+							print "   ",d
+							count +=1
+							if count == n_reform_samples:
+								break
+					print ".",
+			if same_context:
+				print "  Generating with same_context reformulation using",best
+				if len(best.context):
+					count = 0
+					cond = list(best.context)
+					while count < n_reform_samples:
+						designs= self.synthesise_with_reformulation(best,reform_type="same_context", n_samples=1000,n_iter=n_reform_iter, drop_bad=reform_drop)
+						for des in designs:
+							d = self.binarise_features(self.features_from_design_vector(des))
+							if all([c in d for c in cond]):
+								print
+								print "   ",d
+								count +=1
+								s = self.surprising_sets(d, fixed_context=cond, threshold=threshold, n_samples=1000, depth_limit = depth_limit, beam_width=len(d)*2)
+								self.print_surprise(s, prefix="      ")
+								if count == n_reform_samples:
+									break
+						print ".",
+				else:
+					print "  -- skipping same_context as context is empty."
+			if same_discovery:
+				print "  Generating with same_discovery reformulation using",best
+				R = self.model.sample(1000, return_sample_means=False)
+				_sample = theano.function([],R)
+				count = 0
+				cond = best.discovery
+				while count < n_reform_samples:
+					designs = _sample()
+					#designs= self.synthesise_with_reformulation(best,reform_type="same_discovery", n_samples=1000,n_iter=n_reform_iter, drop_bad=reform_drop)
+					for des in designs:
+						d = self.binarise_features(self.features_from_design_vector(des))
+						if cond in d:
+							print "   ",d
+							count +=1
+							s = self.surprising_sets(d, fixed_discovery=cond, threshold=threshold, n_samples=1000, depth_limit = depth_limit, beam_width=len(d)*2)
+							self.print_surprise(s, prefix="      ")
+							if count == n_reform_samples:
+								break
+					print ".",
+				print
+
+
+	def inspection_test(self,metadata,override_query, sample_sizes = 10000, n_iter=1000):
+
 		if len(override_query.keys()):
 			q = override_query
 		else:
@@ -1579,9 +1747,6 @@ class VAEConceptualSpace(ConceptualSpace):
 			print self.binarise_features(self.features_from_design_vector(samp), 0)
 		print "------------------------------------"
 
-		#self.co_occurence_matrix(outpath="co_occurence.csv")
-
-		'''
 		condition = {"i_beef": 1}
 		cond_indices = [metadata["fields_x"].index(i) for i in condition.keys() if condition[i]==1]
 		actual_cond_probs = []
@@ -1647,108 +1812,7 @@ class VAEConceptualSpace(ConceptualSpace):
 		vals = zip(metadata['fields_x'],data_means, sample_means, actual_cond_probs, it_cond, it_cond_drop, actual_cond_probs/data_means, it_cond/sample_means, it_cond_drop/sample_means, -np.log2(actual_cond_probs) + np.log2(data_means), -np.log2(it_cond) + np.log2(sample_means), -np.log2(it_cond_drop) + np.log2(sample_means))
 		for f in vals:
 				print "{0} -- d_mean: {1:.3f}, s_mean: {2:.3f}, data_prob: {3:.3f}, it_cond: {4:.3f}, it_cond_dr: {5:.3f}, data_ratio {6:.3f}, it_cond_ratio {7:.3f}, it_cond_dr_ratio {8:.3f}, data_surp {9:.3f}, it_cond_surp {10:.3f}, it_cond_dr_surp {11:.3f}".format(*f)
-		'''
 
-		threshold = 2
-		depth_limit = 3
-		n_reform_samples = 10
-		n_reform_iter = 10
-		reform_drop = False
-		max_data_surps = []
-		for s in self.data_samples:
-			d = self.binarise_features(self.features_from_design_vector(s))
-			print "Surprising combinations in",d," (from data):"
-			s = self.surprising_sets(d, threshold=threshold, n_samples=1000, depth_limit = depth_limit, beam_width=len(d))
-			self.print_surprise(s)
-			max, best = self.max_surprise(s, return_best=True)
-			max_data_surps.append(max)
-			if best is not None:
-				print "  Generating with replication reformulation using",best
-				count = 0
-				cond = [best.discovery]+list(best.context)
-				while count < n_reform_samples:
-					designs= self.synthesise_with_reformulation(best,reform_type="replicate", n_samples=n_reform_samples*10,n_iter=n_reform_iter, drop_bad=reform_drop)
-					for des in designs:
-						d = self.binarise_features(self.features_from_design_vector(des))
-						if all([c in d for c in cond]):
-							print "   ",d
-							count +=1
-							if count == n_reform_samples:
-								break
-				print "  Generating with same_context reformulation using",best
-				if len(best.context):
-					count = 0
-					cond = list(best.context)
-					while count < n_reform_samples:
-						designs= self.synthesise_with_reformulation(best,reform_type="same_context", n_samples=n_reform_samples*10,n_iter=n_reform_iter, drop_bad=reform_drop)
-						for des in designs:
-							d = self.binarise_features(self.features_from_design_vector(des))
-							if all([c in d for c in cond]):
-								print "   ",d
-								count +=1
-								s = self.surprising_sets(d, threshold=threshold, n_samples=1000, depth_limit = depth_limit, beam_width=len(d))
-								self.print_surprise(s, prefix="      ")
-								if count == n_reform_samples:
-									break
-				else:
-					print "  -- skipping same_context as context is empty."
-				#print "  Generating with same_discovery reformulation using",best
-				#for d in self.synthesise_with_reformulation(best,reform_type="same_discovery", n_samples=n_reform_samples,n_iter=n_reform_iter, drop_bad=reform_drop):
-				#	print "   ",self.binarise_features(self.features_from_design_vector(d))
-			print
-
-		print max_data_surps
-
-		max_model_surps = []
-		for i in range(len(self.data_samples)):
-			s = sampled_designs[np.random.randint(sampled_designs.shape[0]),:]
-			d = self.binarise_features(self.features_from_design_vector(s))
-			print "Surprising combinations in",d," (from model):"
-			s = self.surprising_sets(d, threshold=threshold, n_samples=1000, depth_limit = depth_limit, beam_width=len(d))
-			self.print_surprise(s)
-			max, best = self.max_surprise(s, return_best=True)
-			max_model_surps.append(max)
-			if best is not None:
-				print "  Generating with replication reformulation using",best
-				count = 0
-				cond = [best.discovery]+list(best.context)
-				while count < n_reform_samples:
-					designs= self.synthesise_with_reformulation(best,reform_type="replicate", n_samples=n_reform_samples*10,n_iter=n_reform_iter, drop_bad=reform_drop)
-					for des in designs:
-						d = self.binarise_features(self.features_from_design_vector(des))
-						if all([c in d for c in cond]):
-							print "   ",d
-							count +=1
-							if count == n_reform_samples:
-								break
-				print "  Generating with same_context reformulation using",best
-				if len(best.context):
-					count = 0
-					cond = list(best.context)
-					while count < n_reform_samples:
-						designs= self.synthesise_with_reformulation(best,reform_type="same_context", n_samples=n_reform_samples*10,n_iter=n_reform_iter, drop_bad=reform_drop)
-						for des in designs:
-							d = self.binarise_features(self.features_from_design_vector(des))
-							if all([c in d for c in cond]):
-								print "   ",d
-								count +=1
-								s = self.surprising_sets(d, threshold=threshold, n_samples=1000, depth_limit = depth_limit, beam_width=len(d))
-								self.print_surprise(s, prefix="      ")
-								if count == n_reform_samples:
-									break
-				else:
-					print "  -- skipping same_context as context is empty."
-				#print "  Generating with same_context reformulation using",best
-				#for d in self.synthesise_with_reformulation(best,reform_type="same_context", n_samples=n_reform_samples,n_iter=n_reform_iter, drop_bad=reform_drop):
-				#	print "   ",self.binarise_features(self.features_from_design_vector(d))
-				#print "  Generating with same_discovery reformulation using",best
-				#for d in self.synthesise_with_reformulation(best,reform_type="same_discovery", n_samples=n_reform_samples,n_iter=n_reform_iter, drop_bad=reform_drop):
-				#	print "   ",self.binarise_features(self.features_from_design_vector(d))
-			print
-
-		print max_model_surps
-
-		print "Mean surprise from data was {0} w/ sigma {1}. Mean surprise from model was {2} w/ sigma {3}.".format(np.mean(max_data_surps,axis=0),np.std(max_data_surps,axis=0),np.mean(max_model_surps,axis=0),np.std(max_model_surps,axis=0))
 
 		#print "cs.reconstruct(cs.partial_design_vector_from_features({}))"
 		#for i in range(10):
@@ -1797,7 +1861,6 @@ class VAEConceptualSpace(ConceptualSpace):
 		print sample_expectations
 		print np.mean(sample_expectations,axis=0)
 		'''
-
 
 	def run(self,data, hypers, logging=False, pretrained = [], cv = True):
 		from pylearn2.config import yaml_parse
@@ -2060,7 +2123,7 @@ class VAEConceptualSpace(ConceptualSpace):
 				new.append(k.encode("ascii", "ignore"))
 		return new
 
-	def estimate_surprise_given_context(self, design, context, samples, probs, n_iter, drop_bad, sample_means=None):
+	def estimate_surprise_given_context(self, design, context, samples, probs, n_iter, drop_bad, sample_means=None, candidates=None):
 		surprisals = {}
 		if sample_means is None:
 			R = self.model.sample(samples, return_sample_means=False)
@@ -2069,7 +2132,10 @@ class VAEConceptualSpace(ConceptualSpace):
 			sample_means = np.array(sampled_designs).mean(axis=0)
 
 		if len(context):
-			surprise_candidates = [d for d in design if d not in context]
+			if candidates is None:
+				surprise_candidates = [d for d in design if d not in context]
+			else:
+				surprise_candidates = candidates
 			conditional_dists = self.estimate_conditional_dists(context, samples=samples, probs=probs, n_iter=n_iter, drop_bad_recons=drop_bad)
 
 			for c in surprise_candidates:
@@ -2129,18 +2195,28 @@ class VAEConceptualSpace(ConceptualSpace):
 			'''
 		openlist = [(0,frozenset([]))]
 		if fixed_context is not None:
-			openlist = [(0,frozenset(fixed_context))]
+			context_list = itertools.chain.from_iterable(itertools.combinations(fixed_context, r) for r in range(1,len(fixed_context)+1))
+			openlist = [(0,frozenset(c)) for c in context_list]
 		while len(openlist):
 			context = heapq.heappop(openlist)[1]#openlist.popleft()[1]
 			candidate_surprisals = self.estimate_surprise_given_context(design, list(context), n_samples, probs, n_iter, drop_bad, sample_means = sample_means)
-			foundlist.update({Surprise(discovery=c,context=context): candidate_surprisals[c] for c in candidate_surprisals.keys() if candidate_surprisals[c] > threshold})
+			if fixed_discovery is None:
+				foundlist.update({Surprise(discovery=c,context=context): candidate_surprisals[c] for c in candidate_surprisals.keys() if candidate_surprisals[c] > threshold})
+			else:
+				foundlist.update({Surprise(discovery=c,context=context): candidate_surprisals[c] for c in candidate_surprisals.keys() if candidate_surprisals[c] > threshold and c == fixed_discovery})
 			if fixed_context is None:
 				additions = []
 				if depth_limit is None or len(context) < depth_limit:
 					if drop_threshold is not None:
-						additions = [(-abs(candidate_surprisals[c]),frozenset(list(context)+[c])) for c in candidate_surprisals.keys() if candidate_surprisals[c] > drop_threshold and frozenset(list(context)+[c]) not in closedlist]
+						if fixed_discovery is not None:
+							additions = [(-abs(candidate_surprisals[c]),frozenset(list(context)+[c])) for c in candidate_surprisals.keys() if candidate_surprisals[c] > drop_threshold and frozenset(list(context)+[c]) not in closedlist and fixed_discovery not in list(context)+[c]]
+						else:
+							additions = [(-abs(candidate_surprisals[c]),frozenset(list(context)+[c])) for c in candidate_surprisals.keys() if candidate_surprisals[c] > drop_threshold and frozenset(list(context)+[c]) not in closedlist]
 					else:
-						additions = [(-abs(candidate_surprisals[c]),frozenset(list(context)+[c])) for c in candidate_surprisals.keys() if frozenset(list(context)+[c]) not in closedlist]
+						if fixed_discovery is not None:
+							additions = [(-abs(candidate_surprisals[c]),frozenset(list(context)+[c])) for c in candidate_surprisals.keys() if frozenset(list(context)+[c]) not in closedlist and fixed_discovery not in list(context)+[c]]
+						else:
+							additions = [(-abs(candidate_surprisals[c]),frozenset(list(context)+[c])) for c in candidate_surprisals.keys() if frozenset(list(context)+[c]) not in closedlist]
 				for a in additions:
 					heapq.heappush(openlist,a)
 				openlist.extend(additions)
@@ -2176,7 +2252,7 @@ class VAEConceptualSpace(ConceptualSpace):
 
 
 
-	def synthesise_with_reformulation(self, surp, reform_type="replicate", n_samples=10, n_iter = 50, drop_bad=False):
+	def synthesise_with_reformulation(self, surp, reform_type="replicate", n_samples=10, n_iter = 25, drop_bad=False):
 		if reform_type == "replicate":
 			conditional = [surp.discovery]+list(surp.context)
 		elif reform_type == "same_context":
