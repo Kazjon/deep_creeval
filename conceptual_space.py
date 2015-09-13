@@ -2275,19 +2275,20 @@ class VAEConceptualSpace(ConceptualSpace):
 		return designs
 
 	def co_occurence_matrix(self, metadata, n_samples=1000, n_iter=20, outpath = None):
-		m = np.zeros((len(metadata["fields_x"]),len(metadata["fields_x"])))
+		self.metadata = metadata
+		m = np.zeros((len(self.metadata["fields_x"]),len(self.metadata["fields_x"])))
 
 		batch_size = 1000
 		R = self.model.sample(min(batch_size,n_samples), return_sample_means=False)
 		_sample = theano.function([],R)
-		sampled_designs = np.zeros((n_samples,len(metadata["fields_x"])))
+		sampled_designs = np.zeros((n_samples,len(self.metadata["fields_x"])))
 
 		print "   --Generating samples:"
 		for i in range(n_samples/batch_size):
 			sampled_designs[i*batch_size:(i+1)*batch_size,:] = _sample()
 		sample_means = np.array(sampled_designs).mean(axis=0)
 
-		for i,ing in enumerate(metadata["fields_x"]):
+		for i,ing in enumerate(self.metadata["fields_x"]):
 			m[i,:] = self.estimate_conditional_dists([ing],samples=n_samples,n_iter=n_iter)
 			m[i,:]/= sample_means
 			m[i,i] = sample_means[i]
@@ -2295,9 +2296,9 @@ class VAEConceptualSpace(ConceptualSpace):
 			import csv
 			with open(outpath,"w") as f:
 				writer = csv.writer(f)
-				writer.writerow([""]+metadata["fields_x"])
-				for f,l in zip(metadata["fields_x"],m):
-					l[metadata["fields_x"].index(f)] = 1
+				writer.writerow([""]+self.metadata["fields_x"])
+				for f,l in zip(self.metadata["fields_x"],m):
+					l[self.metadata["fields_x"].index(f)] = 1
 					writer.writerow([f]+list(l))
 		return m
 
