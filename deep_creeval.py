@@ -236,7 +236,7 @@ def feature_unexpectedness(domain_name, datapath="data/", steps_from_file=True, 
 			# Inspect the model
 			#cs.featurewise_inspect(metadata, override_query, n_iter=10)
 			#cs.featurewise_inspect(metadata, override_query, n_iter=20)
-			cs.co_occurence_matrix(outpath="co_occurence_matrix.csv")
+			cs.co_occurence_matrix(metadata,outpath="co_occurence_matrix.csv")
 			#cs.featurewise_inspect(metadata, override_query, n_iter=20)
 			#cs.evaluate_data_surprise(metadata, override_query, start=start,stop=stop)
 		else:
