@@ -1485,7 +1485,7 @@ class LSTMConceptualSpace(ConceptualSpace):
 
 
 class VAEConceptualSpace(ConceptualSpace):
-	fixed_hypers = {"batch_size": 100,
+	fixed_hypers = {"batch_size": 1000,
 					"monitoring_batch_size": 100,
 					"save_path": ".",
 					"yaml_path": "../../../../model_yamls/",
@@ -1550,7 +1550,7 @@ class VAEConceptualSpace(ConceptualSpace):
 		self.metadata = metadata
 		threshold = 2
 		depth_limit = 3
-		n_reform_samples = 100
+		n_reform_samples = 50
 		n_reform_iter = 10
 		reform_drop = False
 		prefix = "i_"
@@ -1566,29 +1566,30 @@ class VAEConceptualSpace(ConceptualSpace):
 		bloody_mary = ['i_worcestershire sauce', 'i_lemon', 'i_black pepper', 'i_salt', 'i_vodka', 'i_tomatoes']
 
 
-        #{Surprise(discovery='i_pork', context=frozenset(["i_chocolate", "i_salt", "i_sugar"])):10.8},
 
-		triggers = [meatlessloaf,bloody_mary,velvet_salad, dilly_muffins]
-		surps = [{Surprise(discovery='i_cottage cheese', context=frozenset(['i_peanuts', 'i_eggs', 'i_onions'])):9.8},
-				 {Surprise(discovery='i_worcestershire sauce', context=frozenset(["i_tomatoes", "i_vodka"])):13.},
-				 {Surprise(discovery='i_celery', context=frozenset(['i_whipped cream', 'i_cherries', 'i_cream cheese'])):11.4},
-				 {Surprise(discovery='i_dill', context=frozenset(['i_margarine', 'i_ricotta', 'i_zucchini'])):15.5}]
+		triggers = [bacon_cupcake, dilly_muffins, velvet_salad]
+#		surps = [{Surprise(discovery='i_cottage cheese', context=frozenset(['i_peanuts', 'i_eggs', 'i_onions'])):9.8},
+#				 {Surprise(discovery='i_worcestershire sauce', context=frozenset(["i_tomatoes", "i_vodka"])):13.},
+#				 {Surprise(discovery='i_pork', context=frozenset(["i_chocolate", "i_salt", "i_sugar"])):10.8},
+#				 {Surprise(discovery='i_celery', context=frozenset(['i_whipped cream', 'i_cherries', 'i_cream cheese'])):11.4},
+#				 {Surprise(discovery='i_dill', context=frozenset(['i_margarine', 'i_ricotta', 'i_zucchini'])):15.5}]
 
-		triggers = triggers[2:]
-		surps = surps[2:]
+		#triggers = triggers[:-2]
+		#surps = surps[:-2]
 
-		for trigger,surp in zip(triggers,surps):
+	#	for trigger,surp in zip(triggers,surps):
+		for trigger in triggers:
 			print "Surprising combinations in",trigger," (from prompt):"
-			#s = self.surprising_sets(trigger, threshold=threshold, n_samples=1000, depth_limit = depth_limit, beam_width=None)
-			#self.print_surprise(s)
+			s = self.surprising_sets(trigger, threshold=threshold, n_samples=100000, depth_limit = depth_limit, beam_width=None)
+			self.print_surprise(s)
 			#sys.exit()
 			#s = {Surprise(discovery='i_bacon', context=frozenset(['i_cocoa', 'i_butter', "i_sugar"])):10.8}
 			#s = {Surprise(discovery='i_celery', context=frozenset(['i_whipped cream', 'i_cherries', 'i_cream cheese'])):11.4}
 			#s = {Surprise(discovery='i_black pepper', context=frozenset(['i_peanuts', 'i_eggs', 'i_olive oil'])):15.5}
 			#s = {Surprise(discovery='i_dill', context=frozenset(['i_margarine', 'i_ricotta', 'i_zucchini'])):15.5}
 			print "using saved surprise sets:"
-			self.print_surprise(surp)
-			self.reformulation_test(surp, n_reform_samples,n_reform_iter,reform_drop,depth_limit,threshold)
+#			self.print_surprise(surp)
+#			self.reformulation_test(surp, n_reform_samples,n_reform_iter,reform_drop,depth_limit,threshold)
 
 		sys.exit()
 		if len(override_query.keys()):
@@ -2024,9 +2025,7 @@ class VAEConceptualSpace(ConceptualSpace):
 	def estimate_conditional_dists(self, observed, samples=10000, probs="random", n_iter=1, verbose=False, return_samples = False, drop_bad_recons=False):
 		if type(observed) == list:
 			observed = {i:1 for i in observed}
-		designs = np.zeros((samples,len(self.metadata["fields_x"])))
-		for i in range(samples):
-			designs[i,:] = self.partial_design_vector_from_features(observed, fill=probs)
+		designs = self.partial_design_vector_from_features(observed, n=samples, fill=probs)
 		if verbose:
 			print "observed:", observed
 			print "probs:",probs
@@ -2068,13 +2067,18 @@ class VAEConceptualSpace(ConceptualSpace):
 	def reconstruct(self, design, noisy_encoding=False, return_all=False):
 		if type(design) is list:
 			design = self.design_vector_from_features(design)
-		if return_all:
+		recon = np.zeros(design.shape)
+		means = np.zeros(design.shape)
+		for i in range(design.shape[0]/self.fixed_hypers["batch_size"]):
+			d = design[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:]
+			if return_all:
+				if noisy_encoding:
+					recon[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:], means[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:] = self._recon_return_noisy(np.atleast_2d(d))
+				recon[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:], means[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:] =  self._recon_return(np.atleast_2d(d))
 			if noisy_encoding:
-				return self._recon_return_noisy(np.atleast_2d(design))
-			return self._recon_return(np.atleast_2d(design))
-		if noisy_encoding:
-			return self._recon_noisy(np.atleast_2d(design))
-		return self._recon(np.atleast_2d(design))
+				recon[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:], means[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:] =  self._recon_noisy(np.atleast_2d(d))
+			recon[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:], means[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:] =  self._recon(np.atleast_2d(d))
+		return recon,means
 
 	def recon_cost(self, design):
 		if type(design) is list:
@@ -2092,20 +2096,21 @@ class VAEConceptualSpace(ConceptualSpace):
 
 
 	# Takes dict of features with 0/1 values, sets them, makes everything else random -- either uniformly or normally given provided vectors of mu and sigma.
-	def partial_design_vector_from_features(self, features, fill="random"):
+	def partial_design_vector_from_features(self, features, n=1, fill="random"):
 		feature_list = self.metadata["fields_x"]
-		design = np.zeros(len(feature_list))
+		design = np.zeros((n,len(feature_list)))
 		if fill == "random":
-			design = np.random.random_integers(0,high=1,size=len(feature_list))
+			design = np.random.random_integers(0,high=1,size=(n,len(feature_list)))
 		elif type(fill) in [list,np.ndarray]: # Indicates proportional randomness
-			for k in range(len(design)):
-				if np.random.random() < fill[k]:
-					design[k] = 1
+			for i in range(n):
+				for k in range(len(design)):
+					if np.random.random() < fill[k]:
+						design[i,k] = 1
 		else:
 			design += 0.5
 		for k,v in features.iteritems():
 			if k in feature_list:
-				design[feature_list.index(k)] = v
+				design[:,feature_list.index(k)] = v
 			else:
 				print k,"doesn't appear to be in a variable in the design space!"
 		return design
@@ -2171,9 +2176,15 @@ class VAEConceptualSpace(ConceptualSpace):
 		foundlist = {}
 		Surprise = namedtuple("Surprise",("discovery","context"))
 
-		R = self.model.sample(n_samples*10, return_sample_means=False)
+		batch_size = 1000
+		R = self.model.sample(min(batch_size,n_samples), return_sample_means=False)
 		_sample = theano.function([],R)
-		sampled_designs = _sample()
+
+		sampled_designs = np.zeros((n_samples,len(self.metadata["fields_x"])))
+
+		print "   --Generating samples:"
+		for i in range(n_samples/batch_size):
+			sampled_designs[i*batch_size:(i+1)*batch_size,:] = _sample()
 		sample_means = np.array(sampled_designs).mean(axis=0)
 		'''
 		if mode == "exhaustive":
@@ -2193,6 +2204,7 @@ class VAEConceptualSpace(ConceptualSpace):
 				closedlist.update(additions)
 		elif type(mode) is tuple and mode[0] == "beam":
 			'''
+		print "   --Evaluating surprise."
 		openlist = [(0,frozenset([]))]
 		if fixed_context is not None:
 			context_list = itertools.chain.from_iterable(itertools.combinations(fixed_context, r) for r in range(1,len(fixed_context)+1))
@@ -2264,8 +2276,21 @@ class VAEConceptualSpace(ConceptualSpace):
 
 	def co_occurence_matrix(self, n_samples=1000, n_iter=20, outpath = None):
 		m = np.zeros((len(self.metadata["fields_x"]),len(self.metadata["fields_x"])))
+
+		batch_size = 1000
+		R = self.model.sample(min(batch_size,n_samples), return_sample_means=False)
+		_sample = theano.function([],R)
+		sampled_designs = np.zeros((n_samples,len(self.metadata["fields_x"])))
+
+		print "   --Generating samples:"
+		for i in range(n_samples/batch_size):
+			sampled_designs[i*batch_size:(i+1)*batch_size,:] = _sample()
+		sample_means = np.array(sampled_designs).mean(axis=0)
+
 		for i,ing in enumerate(self.metadata["fields_x"]):
 			m[i,:] = self.estimate_conditional_dists([ing],samples=n_samples,n_iter=n_iter)
+			m[i,:]/= sample_means
+			m[i,i] = sample_means[i]
 		if outpath is not None:
 			import csv
 			with open(outpath,"w") as f:
