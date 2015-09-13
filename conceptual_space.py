@@ -2288,10 +2288,12 @@ class VAEConceptualSpace(ConceptualSpace):
 			sampled_designs[i*batch_size:(i+1)*batch_size,:] = _sample()
 		sample_means = np.array(sampled_designs).mean(axis=0)
 
+		print sample_means
 		for i,ing in enumerate(self.metadata["fields_x"]):
 			m[i,:] = self.estimate_conditional_dists([ing],samples=n_samples,n_iter=n_iter)
 			m[i,:]/= sample_means
 			m[i,i] = sample_means[i]
+			print m[i,:]
 		if outpath is not None:
 			import csv
 			with open(outpath,"w") as f:
