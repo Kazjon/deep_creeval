@@ -212,7 +212,7 @@ def unexpectedness(domain_name,pretrain_start = None, pretrain_stop = None, trai
 		print "Could not find a record for the dataset",domain_name,"in the database."
 
 # Measures the feature-based unexpectedness of a given saved model.
-def feature_unexpectedness(domain_name, datapath="data/", steps_from_file=True, override_query = {}, drop_fields = [], bypass_mongo=False, start=0, stop=-1):
+def feature_unexpectedness(domain_name, eval_name, datapath="data/", steps_from_file=True, override_query = {}, drop_fields = [], bypass_mongo=False, start=0, stop=-1):
 	#Pull best hypers out of the database
 	client = pymongo.MongoClient()
 	db = client.creeval
@@ -236,9 +236,11 @@ def feature_unexpectedness(domain_name, datapath="data/", steps_from_file=True, 
 			# Inspect the model
 			#cs.featurewise_inspect(metadata, override_query, n_iter=10)
 			#cs.featurewise_inspect(metadata, override_query, n_iter=20)
-			cs.co_occurence_matrix(metadata,outpath="co_occurence_matrix.csv")
+			#cs.co_occurence_matrix(metadata,outpath="co_occurence_matrix.csv")
 			#cs.featurewise_inspect(metadata, override_query, n_iter=20)
-			#cs.evaluate_data_surprise(metadata, override_query, start=start,stop=stop)
+			cs.evaluate_data_surprise(metadata, eval_name, override_query, start=start,stop=stop)
+
+			#cs.reformulation_test()
 		else:
 			print "The database",domain_name,"does not contain fitted hyperparameters.  Run fit_hypers() on it first."
 	else:
@@ -271,21 +273,30 @@ if __name__ == "__main__":
 
 	#Args for unex_fwise
 	parser.add_argument("-k","--skip",help="The number of examples to skip when evaluating the data", required=False,type=int,default=0)
+	parser.add_argument("-v","--eval_name",help="The name of the collection to which to save surprise evaluations", required=False,type=str,default=0)
+
+
+	parser.add_argument("-d","--condition",help="The condition (used for DCC2016 paper: 0=all, 1=onlysugar, 2=nosugar", required=False,type=int,default=0)
 
 	args = parser.parse_args()
 	collname = args.dataset
 	query = {}
-	override_query = {}
+	if args.condition == 0:
+		override_query = {}
+	elif args.condition == 1:
+		override_query = {"$or" : [{"i_sugar": {"$exists":True}}, {"i_brown_sugar": {"$exists":True}}]}
+	elif args.condition == 2:
+		override_query = {"$and" : [{"i_sugar": {"$exists":False}}, {"i_brown_sugar": {"$exists":False}}]}
 	ignore_fields = []
-	#if "ebird" in args.dataset:
-	#	#ten_species = ['Zenaida_macroura', 'Corvus_brachyrhynchos', 'Cardinalis_cardinalis', 'Turdus_migratorius', 'Cyanocitta_cristata', 'Spinus_tristis', 'Sturnus_vulgaris', 'Melospiza_melodia', 'Agelaius_phoeniceus', 'Picoides_pubescens']
-	#	#collname = "ebird_top10_2008_2012"
-	#	ignore_fields = ["LATITUDE","LONGITUDE",'Zenaida_macroura', 'Corvus_brachyrhynchos', 'Cardinalis_cardinalis', 'Cyanocitta_cristata', 'Spinus_tristis', 'Sturnus_vulgaris', 'Melospiza_melodia', 'Agelaius_phoeniceus', 'Picoides_pubescens']
-	#
-	#	species = ['Turdus_migratorius']
-	#	for s in species:
-	#		query[s] = {"$gt": 0}
-	#	override_query["$or"] = [{k:query[k]} for k in query.keys()]
+	if "ebird" in args.dataset:
+		#ten_species = ['Zenaida_macroura', 'Corvus_brachyrhynchos', 'Cardinalis_cardinalis', 'Turdus_migratorius', 'Cyanocitta_cristata', 'Spinus_tristis', 'Sturnus_vulgaris', 'Melospiza_melodia', 'Agelaius_phoeniceus', 'Picoides_pubescens']
+		#collname = "ebird_top10_2008_2012"
+		ignore_fields = ["LATITUDE","LONGITUDE",'Zenaida_macroura', 'Corvus_brachyrhynchos', 'Cardinalis_cardinalis', 'Cyanocitta_cristata', 'Spinus_tristis', 'Sturnus_vulgaris', 'Melospiza_melodia', 'Agelaius_phoeniceus', 'Picoides_pubescens']
+
+		species = ['Turdus_migratorius']
+		for s in species:
+			query[s] = {"$gt": 0}
+		override_query["$or"] = [{k:query[k]} for k in query.keys()]
 
 
 	if args.mode == "fit_hypers":
@@ -305,4 +316,4 @@ if __name__ == "__main__":
 		unexpectedness(collname, pretrain_start = args.pretrain_start, pretrain_stop = args.pretrain_stop, train_stop = args.train_stop, time_slice = args.time_slice, datapath = os.path.join("data/",collname,args.exp_name), override_query=override_query, drop_fields = ignore_fields, sample_size=args.sample_limit, start_step=args.starting_step, bypass_mongo=args.bypass_mongo)
 	elif args.mode == "unex_fwise":
 		print "Initiating featurewise unexpectedness evaluation of",args.exp_name+"."
-		feature_unexpectedness(collname, datapath = os.path.join("data/",collname,args.exp_name), override_query=override_query, drop_fields = ignore_fields, bypass_mongo=args.bypass_mongo, start=args.skip,stop=args.sample_limit)
+		feature_unexpectedness(collname, args.eval_name, datapath = os.path.join("data/",collname,args.exp_name), override_query=override_query, drop_fields = ignore_fields, bypass_mongo=args.bypass_mongo, start=args.skip,stop=args.sample_limit)

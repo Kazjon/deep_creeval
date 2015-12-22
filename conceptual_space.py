@@ -6,7 +6,7 @@ import AnimTSNE_experiment
 import monary
 from copy import deepcopy
 
-import os, os.path, pprint, textwrap, csv, importlib, sys, optparse , time, inspect, DUconfig, model_inspector, scipy.misc, scipy.spatial, sklearn.mixture, matplotlib, qutip, itertools, copy, sklearn.preprocessing, pymc
+import os, os.path, pprint, textwrap, csv, importlib, sys, optparse , time, inspect, DUconfig, model_inspector, scipy.misc, scipy.spatial, scipy.stats, sklearn.mixture, matplotlib, qutip, itertools, copy, sklearn.preprocessing, pymc
 
 from collections import OrderedDict, deque, namedtuple
 
@@ -133,7 +133,7 @@ def deep_recon(data, encoders, decoders, cost, batch_size, test_indices=[]):
 		results = np.mean(np.vstack(results))
 	return float(results) # We have to cast this to a non-numpy float for some reason to do with mongodb -- I suspect BSON is at fault, but no matter.
 
-def monary_load(collection, fields_x, fields_y, start=0, stop=0, find_args={}, return_timefield=False,timefield="timefield", type="float32", split = None, shuffle_split=True):
+def monary_load(collection, fields_x, fields_y, start=0, stop=0, find_args={}, return_timefield=False,timefield="timefield", type="float32", split = None, shuffle_split=True, return_ids = False):
 	print "Loading from MongoDB via monary with:"
 	print "  - collection:",collection
 	print "  - fields_x:",fields_x
@@ -141,6 +141,7 @@ def monary_load(collection, fields_x, fields_y, start=0, stop=0, find_args={}, r
 	print "  - start:",start
 	print "  - stop:",stop
 	print "  - find_args:",find_args
+	print "  - return_ids:",return_ids
 
 	monary.monary.MAX_COLUMNS = 4096
 	if return_timefield:
@@ -150,16 +151,25 @@ def monary_load(collection, fields_x, fields_y, start=0, stop=0, find_args={}, r
 	monary_type = type
 	if type == "exists":
 		monary_type = "type"
+	types = [monary_type] * numfields
+	if return_ids:
+		fields_x = deepcopy(fields_x)
+		fields_x = [u"_id"] + fields_x
+		types = ["string:12"] + types
 	with monary.Monary("127.0.0.1") as monaryclient:
 		out = monaryclient.query(
 			"creeval",
 			collection,
 			find_args,
 			fields_x+fields_y,
-			[monary_type] * numfields,
+			types,
 			limit=(stop-start),
 			offset=start
 		)
+	if return_ids:
+		ids = np.ma.filled(out[0],"")
+		out = out[1:]
+		fields_x = fields_x[1:]
 	if type=="exists":
 		for i,col in enumerate(out[0:len(fields_x)]):
 			out[i] = np.ma.filled(col,0)
@@ -204,11 +214,19 @@ def monary_load(collection, fields_x, fields_y, start=0, stop=0, find_args={}, r
 		y_train = y[:split_ind,:]
 		y_test = y[split_ind:,:]
 		if return_timefield:
+			if return_ids:
+				return DenseDesignMatrix(X=X_train,y=y_train),DenseDesignMatrix(X=X_test,y=y_test), timefields, ids
 			return DenseDesignMatrix(X=X_train,y=y_train),DenseDesignMatrix(X=X_test,y=y_test), timefields
+		if return_ids:
+			return DenseDesignMatrix(X=X_train,y=y_train),DenseDesignMatrix(X=X_test,y=y_test),ids
 		return DenseDesignMatrix(X=X_train,y=y_train),DenseDesignMatrix(X=X_test,y=y_test)
 	else:
 		if return_timefield:
+			if return_ids:
+				return DenseDesignMatrix(X=X,y=y), timefields, ids
 			return DenseDesignMatrix(X=X,y=y), timefields
+		if return_ids:
+			return DenseDesignMatrix(X=X,y=y), ids
 		return DenseDesignMatrix(X=X,y=y)
 
 class ConceptualSpace():
@@ -305,36 +323,64 @@ class ConceptualSpace():
 			stop_time += metadata["time_slice"]
 
 	def stepwise_inspect(self,metadata,override_query, sample_size=50000,save_path="", resample=1, start_step=0):
+		self.metadata = metadata
 		start_time = metadata["pretrain_start"]
 		if len(override_query.keys()):
 			q = override_query
 		else:
 			q = deepcopy(metadata["query"])
+
+		single_query = True
+		if single_query:
+			full_query = {'$and': [q]}
+			full_query['$and'].append({metadata["timefield"]: {"$gte": start_time}})
+			data, times, ids = monary_load(self.domain_name,metadata["fields_x"],metadata["fields_y"],find_args=full_query, return_timefield=True,timefield=metadata["timefield"], return_ids=True)
+			data_zip = sorted(zip(data.X, times, ids),key = lambda t: t[1])
+			data.X, times, ids = zip(*data_zip)
+			data.X = np.array(data.X)
+			times = np.array(times)
+			ids = np.array(ids)
+			index = 0
+			step_indices = []
+			from bisect import bisect
+			for step in metadata["steps"][start_step+1:]:
+				step_indices.append(bisect(times,step["stop"],lo=index))
+				index = step_indices[-1]
+
+
 		print "Calculating unexpectedness of each step."
+		divergences = []
 		for i,step in enumerate(metadata["steps"][start_step+1:]):
 			#start_time = step["start"]
 			stop_time = step["stop"]
 			print "Inspecting step "+str(i+start_step)+". "+str(start_time)+"--"+str(stop_time)+"."
 			if "error" not in step.keys():
 				#query
-				step_query = {'$and': [q]}
-				step_query['$and'].append({metadata["timefield"]: {"$gte": start_time}})
-				#step_query['$and'].append({metadata["timefield"]: {"$gte": metadata["pretrain_start"]}})
-				step_query['$and'].append({metadata["timefield"]: {"$lt": stop_time}})
-				print "   --- Query built."
+				if single_query:
+					data.X = data.X[:step_indices[i]]
+					times = times[:step_indices[i]]
+					ids = ids[:step_indices[i]]
+				else:
+					step_query = {'$and': [q]}
+					step_query['$and'].append({metadata["timefield"]: {"$gte": start_time}})
+					#step_query['$and'].append({metadata["timefield"]: {"$gte": metadata["pretrain_start"]}})
+					step_query['$and'].append({metadata["timefield"]: {"$lt": stop_time}})
+					print "   --- Query built."
 
-				#sample
-				data, times = monary_load(self.domain_name,metadata["fields_x"],metadata["fields_y"],find_args=step_query, return_timefield=True,timefield=metadata["timefield"])
+					#sample
+					data, times, ids = monary_load(self.domain_name,metadata["fields_x"],metadata["fields_y"],find_args=step_query, return_timefield=True,timefield=metadata["timefield"], return_ids=True)
 				for k in range(resample): #Testing multiple clusterings of each step with different samplings.
 					if data.X.shape[0] > sample_size:
 						indices = np.random.choice(data.X.shape[0],size=sample_size)
 						times_sample = times[indices]
 						data_sample = data.X[indices,:]
+						ids_sample = ids[indices]
 					else:
 						data_sample = data.X
 						times_sample = times
+						ids_sample = ids
 					#del data
-					print "   --- Data loaded."
+					print "   --- Data sampled."
 
 					#load models
 					model1 = {}
@@ -366,13 +412,17 @@ class ConceptualSpace():
 					model2["name"] = "previous_"+str(k)
 					print "   --- Model 2 load complete"
 
-					self.compare_models(data_sample, model1, model2, times_sample, save_path=os.path.dirname(step["model_files"][0]))
+					divergences.append(self.compare_models(data_sample, model1, model2, times_sample, ids_sample, save_path=os.path.dirname(step["model_files"][0])))
 					del model1
 					del model2
 					del data_sample
 					del times_sample
 			else:
 				print "   --- Error: "+step["error"]
+		plt.figure(figsize=(10,10))
+		plt.plot(zip(*divergences)[0])
+		plt.plot(zip(*divergences)[1])
+		plt.savefig(os.path.join(save_path,"divergences.png"), bbox_inches='tight')
 
 
 	def predict(self, record):
@@ -390,7 +440,7 @@ class ConceptualSpace():
 		raise NotImplementedError
 
 	#This needs to be implemented by subclasses
-	def compare_models(self, O_by_A, model1, model2, times, save_path=""):
+	def compare_models(self, O_by_A, model1, model2, times, ids, save_path=""):
 		raise NotImplementedError
 
 	def train_mongo(self, fields_x, fields_y, query, threshold = 0.01, look_back = 3, sample_limit = 0):
@@ -749,15 +799,19 @@ class SDAConceptualSpace(ConceptualSpace):
 
 		pprint(alignments)
 
-	def compare_models(self, O_by_A, model1, model2, times, save_path=""):
-		ObyA_tsne = np.array(list(bh_tsne.bh_tsne(O_by_A, no_dims=2, perplexity=30)))
+	def compare_models(self, O_by_A, model1, model2, times, ids, save_path=""):
+		do_tsne = False
+		do_attr_divergence = True
+		if do_tsne:
+			ObyA_tsne = np.array(list(bh_tsne.bh_tsne(O_by_A, no_dims=2, perplexity=30)))
 		for alpha in [1000]:
 			for m,model in enumerate([model1, model2]):
-				model["tsne_joint_probs"] = squareform(_joint_probabilities(pairwise_distances(validation.check_array(model["F_by_O_normed"].T, accept_sparse=['csr', 'csc', 'coo'], dtype=np.float64), metric='euclidean', n_jobs=1, squared=True),30,2))
-				#model["tsne"] = np.array(list(bh_tsne.bh_tsne(model["F_by_O_normed"].T, no_dims=2, perplexity=30)))
-				model["tsne"] = AnimTSNE_experiment.TSNE(n_components=2, perplexity=30,n_iter=200, save_path=os.path.join(save_path,"AnimTSNE",model["name"]+"/"))
-				model["tsne"].fit_transform(model["F_by_O_normed"].T, c=[0]*O_by_A.shape[0])
-				'''
+				if do_tsne:
+					model["tsne_joint_probs"] = squareform(_joint_probabilities(pairwise_distances(validation.check_array(model["F_by_O_normed"].T, accept_sparse=['csr', 'csc', 'coo'], dtype=np.float64), metric='euclidean', n_jobs=1, squared=True),30,2))
+					#model["tsne"] = np.array(list(bh_tsne.bh_tsne(model["F_by_O_normed"].T, no_dims=2, perplexity=30)))
+					model["tsne"] = AnimTSNE_experiment.TSNE(n_components=2, perplexity=30,n_iter=200, save_path=os.path.join(save_path,"AnimTSNE",model["name"]+"/"))
+					model["tsne"].fit_transform(model["F_by_O_normed"].T, c=[0]*O_by_A.shape[0])
+					'''
 				model["clustermodel"],model["clusterreps"],model["clusterpreds"] = self.representation_clustering_VBGMM(model["F_by_O_normed"].T,n_components=6,alpha=alpha,tol=1e-9,n_iter=10000000)
 				model["clustermeans"] = []
 				model["clusterstdevs"] = []
@@ -814,11 +868,12 @@ class SDAConceptualSpace(ConceptualSpace):
 			basesize = 10
 			modsize = 100
 
-			#probdiffs = np.absolute(model1["tsne_joint_probs"] - model2["tsne_joint_probs"])
-			#probdiffs = [cosine(u,v) for (u,v) in zip(model1["tsne_joint_probs"], model2["tsne_joint_probs"])]
-			probdiffs = [scipy.stats.entropy(u,v) for (u,v) in zip(model1["tsne_joint_probs"], model2["tsne_joint_probs"])]
-			probdiffs = sklearn.preprocessing.MinMaxScaler().fit_transform(np.log(probdiffs))
-			sq_probdiffs = np.sqrt(probdiffs)
+			if do_tsne:
+				#probdiffs = np.absolute(model1["tsne_joint_probs"] - model2["tsne_joint_probs"])
+				#probdiffs = [cosine(u,v) for (u,v) in zip(model1["tsne_joint_probs"], model2["tsne_joint_probs"])]
+				probdiffs = [scipy.stats.entropy(u,v) for (u,v) in zip(model1["tsne_joint_probs"], model2["tsne_joint_probs"])]
+				probdiffs = sklearn.preprocessing.MinMaxScaler().fit_transform(np.log(probdiffs))
+				sq_probdiffs = np.sqrt(probdiffs)
 			m1_cosmat = sklearn.metrics.pairwise.pairwise_distances(model1["F_by_O"].T,metric="cosine")
 			m2_cosmat = sklearn.metrics.pairwise.pairwise_distances(model2["F_by_O"].T,metric="cosine")
 			cosdiffs = [cosine(u,v) for (u,v) in zip(m1_cosmat, m2_cosmat)]
@@ -852,7 +907,123 @@ class SDAConceptualSpace(ConceptualSpace):
 			dErrors_colourcap = 5
 			dErrors_colournorm = matplotlib.colors.Normalize(vmin=-dErrors_colourcap * dErrors_stdev,vmax=dErrors_colourcap * dErrors_stdev)
 
-			model2["tsne"].tsne_update(model1["tsne"].P, c=eucdiffs)
+			with open(os.path.join(save_path,"diff_errors.csv"),"w") as outf:
+				w = csv.writer(outf)
+				for l in zip(ids,dErrors):
+					w.writerow(l)
+				#w.writelines(zip(ids,dErrors))
+				#np.savetxt(outf,zip(ids,dErrors),fmt=["%s","%10.8f"])
+
+			if do_tsne:
+				model2["tsne"].tsne_update(model1["tsne"].P, c=eucdiffs)
+
+			if do_attr_divergence:
+				#Resample the dataset by its dErrors
+
+				weight_all = False #If we're using the weight-all-samples version, rather than the positive-weights-only-the-improved and negative-weights-only-the-worsened
+				weight_power = 2
+				if weight_all:
+					weight_cap = 3
+					pos_weights = np.clip(dErrors_scaled,-weight_cap,weight_cap) + weight_cap
+					neg_weights = (-1 * pos_weights) + (2 * weight_cap)
+					pos_weights = pos_weights ** weight_power
+					neg_weights = neg_weights ** weight_power
+				else:
+					weight_percentile_cap = 95
+					pos_weight_cap = weight_percentile_cap
+					max_weight = np.percentile(dErrors,pos_weight_cap)
+					while max_weight <=0:
+						pos_weight_cap = 100-((100-pos_weight_cap)/2.0)
+						print "No positive dErrors found under cap, increasing cap to {0}%.".format(pos_weight_cap)
+						max_weight = np.percentile(dErrors,pos_weight_cap)
+					pos_weights = (np.clip(dErrors,0,max_weight)/max_weight) ** weight_power
+
+					neg_weight_cap = 100 - weight_percentile_cap
+					min_weight = np.percentile(dErrors,neg_weight_cap)
+					while min_weight >=0:
+						neg_weight_cap = neg_weight_cap/2.0
+						print "No negative dErrors found under cap, decreasing cap to {0}%.".format(pos_weight_cap)
+					min_weight = np.percentile(dErrors,neg_weight_cap)
+					neg_weights = (np.clip(dErrors,min_weight, 0) / min_weight) ** weight_power
+
+				pos_weights /= np.sum(pos_weights)
+				neg_weights /= np.sum(neg_weights)
+				pos_sample_inds = np.random.choice(O_by_A.shape[0],O_by_A.shape[0],p=pos_weights)
+				neg_sample_inds = np.random.choice(O_by_A.shape[0],O_by_A.shape[0],p=neg_weights)
+				pos_resampled = O_by_A[pos_sample_inds,:]
+				pos_times = times[pos_sample_inds]
+				pos_dErrors = dErrors[pos_sample_inds]
+				neg_resampled = O_by_A[neg_sample_inds,:]
+				neg_times = times[neg_sample_inds]
+				neg_dErrors = dErrors[neg_sample_inds]
+
+				from sklearn.neighbors import KernelDensity
+				from sklearn.grid_search import GridSearchCV
+
+				discrete_space = np.linspace(-3,3,1000)
+				pos_divergences = []
+				neg_divergences = []
+				divergence_attrs = ["time"]+deepcopy(self.metadata["fields_x"])
+				for i,attr in enumerate(divergence_attrs):
+					print "Divergence of #{0}: {1}.".format(i,attr)
+					if i is 0:
+						attr_standardised = sklearn.preprocessing.StandardScaler().fit_transform(times)
+					else:
+						attr_standardised = sklearn.preprocessing.StandardScaler().fit_transform(O_by_A[:,i-1])
+					pos_vector = attr_standardised[pos_sample_inds]
+					neg_vector = attr_standardised[neg_sample_inds]
+
+					kde_grid = GridSearchCV(KernelDensity(),{'bandwidth': [0.05,0.1,0.2,0.5]},cv=10)
+					kde_grid.fit(np.atleast_2d(pos_vector).T)
+					kde = kde_grid.best_estimator_
+					pos_pdf = np.exp(kde.score_samples(np.atleast_2d(discrete_space).T))
+
+					kde_grid = GridSearchCV(KernelDensity(),{'bandwidth': [0.05,0.1,0.2,0.5]},cv=10)
+					kde_grid.fit(np.atleast_2d(neg_vector).T)
+					kde = kde_grid.best_estimator_
+					neg_pdf = np.exp(kde.score_samples(np.atleast_2d(discrete_space).T))
+
+					kde_grid = GridSearchCV(KernelDensity(),{'bandwidth': [0.05,0.1,0.2,0.5]},cv=10)
+					kde_grid.fit(np.atleast_2d(attr_standardised).T)
+					kde = kde_grid.best_estimator_
+					all_pdf = np.exp(kde.score_samples(np.atleast_2d(discrete_space).T))
+
+
+					pos_divergence =  scipy.stats.entropy(pk=all_pdf, qk=pos_pdf, base=2)
+					neg_divergence =  scipy.stats.entropy(pk=all_pdf, qk=neg_pdf, base=2)
+					pos_divergences.append(pos_divergence)
+					neg_divergences.append(neg_divergence)
+
+					print "  pos_divergence:",pos_divergence
+					print "  neg_divergence:",neg_divergence
+
+					plt.figure(figsize=(10,10))
+					plt.plot(discrete_space, pos_pdf)
+					plt.plot(discrete_space, all_pdf)
+					plt.plot(discrete_space, neg_pdf)
+					plt.savefig(os.path.join(save_path,"kde_pdfs.png"), bbox_inches='tight')
+					plt.close("all")
+					plt.figure(figsize=(10,10))
+					plt.scatter(attr_standardised, dErrors, s=15)
+					plt.savefig(os.path.join(save_path,"all{0}_v_dErrors.png".format(attr)), bbox_inches='tight')
+					plt.close("all")
+					plt.figure(figsize=(10,10))
+					plt.scatter(neg_vector, neg_dErrors , s=15)
+					plt.savefig(os.path.join(save_path,"neg{0}_v_dErrors.png".format(attr)), bbox_inches='tight')
+					plt.close("all")
+					plt.figure(figsize=(10,10))
+					plt.scatter(pos_vector, pos_dErrors, s=15)
+					plt.savefig(os.path.join(save_path,"pos{0}_v_dErrors.png".format(attr)), bbox_inches='tight')
+					plt.close("all")
+					plt.figure(figsize=(10,10))
+					plt.scatter(pos_vector, pos_dErrors, s=15)
+					plt.scatter(neg_vector, neg_dErrors , s=15)
+					plt.scatter(attr_standardised, dErrors, s=15)
+					plt.savefig(os.path.join(save_path,"all_pos_neg_{0}_v_dErrors.png".format(attr)), bbox_inches='tight')
+					plt.close("all")
+
+
+
 
 			'''***
 			print "scipy.stats.ks_2samp(dErrors[old],dErrors[new]):",scipy.stats.ks_2samp(dErrors[old],dErrors[new])
@@ -913,10 +1084,11 @@ class SDAConceptualSpace(ConceptualSpace):
 			print 'minestats(eucdiffs,cosdiffs)["mic"]:',minestats(eucdiffs,cosdiffs)["mic"]
 			***'''
 			#Comparisons against time and error
-			plt.figure(figsize=(10,10))
-			plt.scatter(times,probdiffs, c=dErrors_scaled, cmap="coolwarm_r", s=15)  # Red is for low dError (got worse in the new model), blue is for high dError (got better)
-			plt.savefig(os.path.join(save_path,"probdiffs_v_times_c=dErrors_scaled.png"), bbox_inches='tight')
-			plt.close("all")
+			if do_tsne:
+				plt.figure(figsize=(10,10))
+				plt.scatter(times,probdiffs, c=dErrors_scaled, cmap="coolwarm_r", s=15)  # Red is for low dError (got worse in the new model), blue is for high dError (got better)
+				plt.savefig(os.path.join(save_path,"probdiffs_v_times_c=dErrors_scaled.png"), bbox_inches='tight')
+				plt.close("all")
 			plt.figure(figsize=(10,10))
 			plt.scatter(times,eucdiffs, c=dErrors_scaled, cmap="coolwarm_r", s=15)
 			plt.savefig(os.path.join(save_path,"eucdiffs_v_times_c=dErrors_scaled.png"), bbox_inches='tight')
@@ -930,10 +1102,11 @@ class SDAConceptualSpace(ConceptualSpace):
 			plt.savefig(os.path.join(save_path,"euc_cosdiffs_v_times_c=dErrors_scaled.png"), bbox_inches='tight')
 			plt.close("all")
 
-			plt.figure(figsize=(10,10))
-			plt.scatter(times,dErrors, c=sq_probdiffs, cmap="copper", s=15)
-			plt.savefig(os.path.join(save_path,"dErrors_v_times_c=probdiffs.png"), bbox_inches='tight')
-			plt.close("all")
+			if do_tsne:
+				plt.figure(figsize=(10,10))
+				plt.scatter(times,dErrors, c=sq_probdiffs, cmap="copper", s=15)
+				plt.savefig(os.path.join(save_path,"dErrors_v_times_c=probdiffs.png"), bbox_inches='tight')
+				plt.close("all")
 			plt.figure(figsize=(10,10))
 			plt.scatter(times,dErrors, c=eucdiffs, cmap="copper", s=15)
 			plt.savefig(os.path.join(save_path,"dErrors_v_times_c=eucdiffs.png"), bbox_inches='tight')
@@ -947,10 +1120,11 @@ class SDAConceptualSpace(ConceptualSpace):
 			plt.scatter(cosdiffs,dErrors, c=times_scaled, cmap="copper", s=15)
 			plt.savefig(os.path.join(save_path,"cosdiffs_v_dErrors_c=time.png"), bbox_inches='tight')
 			plt.close("all")
-			plt.figure(figsize=(10,10))
-			plt.scatter(probdiffs,dErrors, c=times_scaled, cmap="copper", s=15)
-			plt.savefig(os.path.join(save_path,"probdiffs_v_dErrors_c=time.png"), bbox_inches='tight')
-			plt.close("all")
+			if do_tsne:
+				plt.figure(figsize=(10,10))
+				plt.scatter(probdiffs,dErrors, c=times_scaled, cmap="copper", s=15)
+				plt.savefig(os.path.join(save_path,"probdiffs_v_dErrors_c=time.png"), bbox_inches='tight')
+				plt.close("all")
 			plt.figure(figsize=(10,10))
 			plt.scatter(eucdiffs,dErrors, c=times_scaled, cmap="copper", s=15)
 			plt.savefig(os.path.join(save_path,"eucdiffs_v_dErrors_c=time.png"), bbox_inches='tight')
@@ -960,20 +1134,22 @@ class SDAConceptualSpace(ConceptualSpace):
 			plt.scatter(cosdiffs,dErrors, c=binned_times, cmap="copper", s=15)
 			plt.savefig(os.path.join(save_path,"cosdiffs_v_dErrors_c=binned_times.png"), bbox_inches='tight')
 			plt.close("all")
-			plt.figure(figsize=(10,10))
-			plt.scatter(probdiffs,dErrors, c=binned_times, cmap="copper", s=15)
-			plt.savefig(os.path.join(save_path,"probdiffs_v_dErrors_c=binned_times.png"), bbox_inches='tight')
-			plt.close("all")
+			if do_tsne:
+				plt.figure(figsize=(10,10))
+				plt.scatter(probdiffs,dErrors, c=binned_times, cmap="copper", s=15)
+				plt.savefig(os.path.join(save_path,"probdiffs_v_dErrors_c=binned_times.png"), bbox_inches='tight')
+				plt.close("all")
 			plt.figure(figsize=(10,10))
 			plt.scatter(eucdiffs,dErrors, c=binned_times, cmap="copper", s=15)
 			plt.savefig(os.path.join(save_path,"eucdiffs_v_dErrors_c=binned_times.png"), bbox_inches='tight')
 			plt.close("all")
 
 			#Comparisons against time and absolute error
-			plt.figure(figsize=(10,10))
-			plt.scatter(times,probdiffs, c=dErrors, cmap="coolwarm_r", s=15, norm=dErrors_colournorm)  # Red is for low dError (got worse in the new model), blue is for high dError (got better)
-			plt.savefig(os.path.join(save_path,"probdiffs_v_times_c=dErrors.png"), bbox_inches='tight')
-			plt.close("all")
+			if do_tsne:
+				plt.figure(figsize=(10,10))
+				plt.scatter(times,probdiffs, c=dErrors, cmap="coolwarm_r", s=15, norm=dErrors_colournorm)  # Red is for low dError (got worse in the new model), blue is for high dError (got better)
+				plt.savefig(os.path.join(save_path,"probdiffs_v_times_c=dErrors.png"), bbox_inches='tight')
+				plt.close("all")
 			plt.figure(figsize=(10,10))
 			plt.scatter(times,eucdiffs, c=dErrors, cmap="coolwarm_r", s=15, norm=dErrors_colournorm)
 			plt.savefig(os.path.join(save_path,"eucdiffs_v_times_c=dErrors.png"), bbox_inches='tight')
@@ -1013,34 +1189,35 @@ class SDAConceptualSpace(ConceptualSpace):
 				plt.close("all")
 			'''
 
-			plt.figure(figsize=(20,20))
-			plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=sq_probdiffs, cmap="copper", s=[basesize+(modsize*p) for p in sq_probdiffs])
-			plt.savefig(os.path.join(save_path,"ObyA_TSNE_probdiffs.png"), bbox_inches='tight')
-			plt.close("all")
-			plt.figure(figsize=(20,20))
-			plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=eucdiffs, cmap="copper", s=[basesize+(modsize*p) for p in eucdiffs])
-			plt.savefig(os.path.join(save_path,"ObyA_TSNE_eucdiffs.png"), bbox_inches='tight')
-			plt.close("all")
-			plt.figure(figsize=(20,20))
-			plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=times_scaled, cmap="copper", s=[basesize+(modsize*p) for p in times_scaled])
-			plt.savefig(os.path.join(save_path,"ObyA_TSNE_times.png"), bbox_inches='tight')
-			plt.close("all")
-			plt.figure(figsize=(20,20))
-			plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=binned_times, cmap="copper", s=[basesize+(modsize*p) for p in binned_times])
-			plt.savefig(os.path.join(save_path,"ObyA_TSNE_times_binned.png"), bbox_inches='tight')
-			plt.close("all")
-			plt.figure(figsize=(20,20))
-			plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=dErrors_scaled, cmap="coolwarm_r", s=30)
-			plt.savefig(os.path.join(save_path,"ObyA_TSNE_dErrors_scaled.png"), bbox_inches='tight')
-			plt.close("all")
-			plt.figure(figsize=(20,20))
-			plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=dErrors, cmap="coolwarm_r", s=30, norm=dErrors_colournorm)
-			plt.savefig(os.path.join(save_path,"ObyA_TSNE_dErrors.png"), bbox_inches='tight')
-			plt.close("all")
-			plt.figure(figsize=(20,20))
-			plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=cosdiffs, cmap="copper", s=[basesize+(modsize*p) for p in cosdiffs])
-			plt.savefig(os.path.join(save_path,"ObyA_TSNE_cosdiffs.png"), bbox_inches='tight')
-			plt.close("all")
+			if do_tsne:
+				plt.figure(figsize=(20,20))
+				plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=sq_probdiffs, cmap="copper", s=[basesize+(modsize*p) for p in sq_probdiffs])
+				plt.savefig(os.path.join(save_path,"ObyA_TSNE_probdiffs.png"), bbox_inches='tight')
+				plt.close("all")
+				plt.figure(figsize=(20,20))
+				plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=eucdiffs, cmap="copper", s=[basesize+(modsize*p) for p in eucdiffs])
+				plt.savefig(os.path.join(save_path,"ObyA_TSNE_eucdiffs.png"), bbox_inches='tight')
+				plt.close("all")
+				plt.figure(figsize=(20,20))
+				plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=times_scaled, cmap="copper", s=[basesize+(modsize*p) for p in times_scaled])
+				plt.savefig(os.path.join(save_path,"ObyA_TSNE_times.png"), bbox_inches='tight')
+				plt.close("all")
+				plt.figure(figsize=(20,20))
+				plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=binned_times, cmap="copper", s=[basesize+(modsize*p) for p in binned_times])
+				plt.savefig(os.path.join(save_path,"ObyA_TSNE_times_binned.png"), bbox_inches='tight')
+				plt.close("all")
+				plt.figure(figsize=(20,20))
+				plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=dErrors_scaled, cmap="coolwarm_r", s=30)
+				plt.savefig(os.path.join(save_path,"ObyA_TSNE_dErrors_scaled.png"), bbox_inches='tight')
+				plt.close("all")
+				plt.figure(figsize=(20,20))
+				plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=dErrors, cmap="coolwarm_r", s=30, norm=dErrors_colournorm)
+				plt.savefig(os.path.join(save_path,"ObyA_TSNE_dErrors.png"), bbox_inches='tight')
+				plt.close("all")
+				plt.figure(figsize=(20,20))
+				plt.scatter(ObyA_tsne[:,0],ObyA_tsne[:,1], c=cosdiffs, cmap="copper", s=[basesize+(modsize*p) for p in cosdiffs])
+				plt.savefig(os.path.join(save_path,"ObyA_TSNE_cosdiffs.png"), bbox_inches='tight')
+				plt.close("all")
 
 			'''
 			plt.figure(figsize=(20,20))
@@ -1200,6 +1377,7 @@ class SDAConceptualSpace(ConceptualSpace):
 			plt.savefig(os.path.join(save_path,model["name"]+"_cos_clustermeans_"+str(k)+".png"), bbox_inches='tight')
 			plt.close("all")
 		'''
+		return pos_divergences,neg_divergences
 
 	def representation_clustering_VBGMM(self,model,alpha=1e-3,tol=1e-5,n_components=20,n_iter=1000, verbose=False):
 		vbgmm = sklearn.mixture.VBGMM(n_components=n_components,alpha=alpha,covariance_type="diag",n_iter=n_iter, tol=tol, verbose=verbose).fit(model)
@@ -1492,8 +1670,8 @@ class VAEConceptualSpace(ConceptualSpace):
 					"layer_fn": "vae",
 					"num_layers": 1,
 					"n_folds": 5,
-	                "nhid_mlp1": 1000,
-	                "nhid_mlp2": 1000,
+	                "nhid_mlp1": 200,
+	                "nhid_mlp2": 200,
 	                "mom_max": 0.95,
 					"monary_type": "exists"
 	}
@@ -1654,7 +1832,7 @@ class VAEConceptualSpace(ConceptualSpace):
 
 		print "Mean surprise from data was {0} w/ sigma {1}. Mean surprise from model was {2} w/ sigma {3}.".format(np.mean(max_data_surps,axis=0),np.std(max_data_surps,axis=0),np.mean(max_model_surps,axis=0),np.std(max_model_surps,axis=0))
 
-	def reformulation_test(self,s, n_reform_samples,n_reform_iter,reform_drop,depth_limit,threshold, replication=True,same_context=True,same_discovery=True):
+	def reformulation_test(self,s, n_reform_samples,n_reform_iter=10,reform_drop=False,depth_limit=3,threshold=2, replication=True,same_context=True,same_discovery=True):
 		max, best = self.max_surprise(s, return_best=True)
 		if best is not None:
 			if replication:
@@ -2237,7 +2415,7 @@ class VAEConceptualSpace(ConceptualSpace):
 					openlist = heapq.nsmallest(beam_width,openlist)
 		return foundlist
 
-	def evaluate_data_surprise(self, metadata, override_query, sample_sizes = 1000, n_iter=50, start=0,stop=-1, threshold=2, depth_limit=3):
+	def evaluate_data_surprise(self, metadata, eval_name, override_query, sample_sizes = 1000, n_iter=50, start=0,stop=-1, threshold=2, depth_limit=3):
 		if len(override_query.keys()):
 			q = override_query
 		else:
@@ -2248,19 +2426,41 @@ class VAEConceptualSpace(ConceptualSpace):
 		client = pymongo.MongoClient()
 		db = client.creeval
 		coll = db[metadata["name"]]
-		coll2 = db[metadata["name"]+"_evals"]
+		coll2 = db[eval_name]
 		cursor = coll.find(q, skip=start, limit=stop)
 
 		for design in data_slice:
 			record = cursor.next()
 			print record
-			d = self.binarise_features(self.features_from_design_vector(design))
-			print "Surprising combinations in",d," (from data):"
-			s = self.surprising_sets(d, threshold=threshold, n_samples=sample_sizes, depth_limit = depth_limit, beam_width=len(d)*depth_limit)
-			self.print_surprise(s)
-			record["surprise_sets"] = [{"discovery":k.discovery,"context":list(k.context),"value":v} for k,v in s.iteritems()]
-			record["max_surprise"] = self.max_surprise(s)
-			coll2.save(record)
+			if coll2.find_one({"name":record["name"]}) is None:
+				d = self.binarise_features(self.features_from_design_vector(design))
+				print "Surprising combinations in",d," (from data):"
+				s = self.surprising_sets(d, threshold=threshold, n_samples=sample_sizes, depth_limit = depth_limit, beam_width=len(d)*depth_limit)
+				self.print_surprise(s)
+				record["surprise_sets"] = [{"discovery":k.discovery,"context":list(k.context),"value":v} for k,v in s.iteritems()]
+				record["max_surprise"] = self.max_surprise(s)
+				coll2.save(record)
+			else:
+				print "--- Recipe has already been evaluated."
+
+	def generate_from_reformulation(self, metadata, eval_coll, recipe_name_list):
+		self.metadata = metadata
+		client = pymongo.MongoClient()
+		db = client.creeval
+		coll = db[eval_coll]
+		for recipe_name in recipe_name_list:
+			recipe = coll.find_one({"name":recipe_name})
+			recipe["surprise_sets"].sort(key=lambda s:s["value"],reverse=True)
+			print recipe["surprise_sets"]
+
+			if len(recipe["surprise_sets"]):
+				i = 0
+				val = recipe["surprise_sets"][i]["value"]
+				while i == float("inf") and i<len(recipe["surprise_sets"]):
+					i += 1
+					val = recipe["surprise_sets"][i]["value"]
+				if val != float("inf"):
+					self.reformulation_test([recipe["surprise_sets"][i]],100)
 
 
 

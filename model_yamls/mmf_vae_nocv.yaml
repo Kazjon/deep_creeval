@@ -9,14 +9,29 @@
             mlp: !obj:pylearn2.models.mlp.MLP {
                 layers: [
                     !obj:pylearn2.models.mlp.RectifiedLinear {
+                        layer_name: 'h_5',
+                        dim: %(nhid_mlp1)i,
+                        irange: 0.25,
+                    },
+                    !obj:pylearn2.models.mlp.RectifiedLinear {
+                        layer_name: 'h_4',
+                        dim: %(nhid_mlp1)i,
+                        irange: 0.25,
+                    },
+                    !obj:pylearn2.models.mlp.RectifiedLinear {
+                        layer_name: 'h_3',
+                        dim: %(nhid_mlp1)i,
+                        irange: 0.25,
+                    },
+                    !obj:pylearn2.models.mlp.RectifiedLinear {
                         layer_name: 'h_2',
-                        dim: %(nhid_mlp2)i,
-                        irange: 0.1,
+                        dim: %(nhid_mlp1)i,
+                        irange: 0.25,
                     },
                     !obj:pylearn2.models.mlp.RectifiedLinear {
                         layer_name: 'h_1',
                         dim: %(nhid_mlp1)i,
-                        irange: 0.1,
+                        irange: 0.25,
                     },
                 ],
             },
@@ -27,13 +42,28 @@
                 layers: [
                     !obj:pylearn2.models.mlp.RectifiedLinear {
                         layer_name: 'h_1',
-                        dim: %(nhid_mlp1)i,
-                        irange: 0.1,
+                        dim: %(nhid_mlp2)i,
+                        irange: 0.25,
                     },
                     !obj:pylearn2.models.mlp.RectifiedLinear {
                         layer_name: 'h_2',
                         dim: %(nhid_mlp2)i,
-                        irange: 0.1,
+                        irange: 0.25,
+                    },
+                    !obj:pylearn2.models.mlp.RectifiedLinear {
+                        layer_name: 'h_3',
+                        dim: %(nhid_mlp2)i,
+                        irange: 0.25,
+                    },
+                    !obj:pylearn2.models.mlp.RectifiedLinear {
+                        layer_name: 'h_4',
+                        dim: %(nhid_mlp2)i,
+                        irange: 0.25,
+                    },
+                    !obj:pylearn2.models.mlp.RectifiedLinear {
+                        layer_name: 'h_5',
+                        dim: %(nhid_mlp2)i,
+                        irange: 0.25,
                     },
                 ],
             },
