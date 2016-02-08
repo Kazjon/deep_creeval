@@ -43,7 +43,8 @@ class MCTSDesignSpace(object):
 		# the game is tied, return a different distinct value, e.g. -1.
 		if self.end_token in state_history[-1]:
 			dict_state = {f:1 for f in state_history[-1]}
-			if self.model.recon_cost(dict_state) > self.win_threshold:
+			nll = self.model.recon_cost(dict_state)[0]
+			if nll > self.win_threshold:
 				return 1
 			return -1
 		return 0

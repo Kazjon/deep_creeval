@@ -78,7 +78,7 @@ if __name__ == "__main__":
 	metadata = init_dataset(args.dataset)
 	model = init_model(args.dataset, metadata, args.model)
 
-	min_ing = 4
+	min_ing = 6
 	max_ing = 12
 	seconds_per_action = 300
 
@@ -89,7 +89,6 @@ if __name__ == "__main__":
 		ing = mcts.get_play()
 		mcts.update(ing)
 		print "Ingredient selected:",ing
-		print "starting_features:",mcts.design_space.starting_features
+		print "Current state:",mcts.states[-1]
 		if ing == design_space.end_token:
 			break
-	print mcts.design_space.starting_features

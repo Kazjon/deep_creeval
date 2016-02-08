@@ -1,5 +1,5 @@
 from __future__ import division
-import datetime, random, math
+import datetime, random, math, sys
 
 
 class MonteCarlo(object):
@@ -10,7 +10,7 @@ class MonteCarlo(object):
 		self.states = []
 		seconds = kwargs.get('time', 60)
 		self.calculation_time = datetime.timedelta(seconds=seconds)
-		self.max_moves = kwargs.get('max_moves', 100)
+		self.max_moves = kwargs.get('max_moves', 30)
 		self.min_moves = kwargs.get('min_moves', 3)
 		self.length_distribution = kwargs.get("length_distribution")
 		self.C = kwargs.get('C', 1.4)
@@ -21,9 +21,7 @@ class MonteCarlo(object):
 		self.states.append(self.design_space.start())
 
 	def update(self, feature):
-		if type(feature) is not tuple:
-			feature = (feature,)
-		self.design_space.starting_features = self.design_space.starting_features + feature
+		self.states.append(self.design_space.next_state(self.states[-1],feature))
 
 	def get_play(self):
 		self.max_depth = 0
@@ -33,7 +31,8 @@ class MonteCarlo(object):
 
 		# Bail out early if there is no real random.choice to be made.
 		if not legal:
-			return
+			print "No legal moves found!"
+			sys.exit()
 		if len(legal) == 1:
 			return legal[0]
 
