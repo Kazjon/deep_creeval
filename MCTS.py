@@ -14,7 +14,7 @@ class MonteCarlo(object):
 		self.min_moves = kwargs.get('min_moves', 3)
 		self.length_distribution = kwargs.get("length_distribution")
 		self.C = kwargs.get('C', 1.4)
-		self.wins = {}
+		self.scores = {}
 		self.plays = {}
 
 	def start(self):
@@ -26,7 +26,6 @@ class MonteCarlo(object):
 	def get_play(self):
 		self.max_depth = 0
 		state = self.states[-1]
-		player = self.design_space.current_player(state)
 		legal = self.design_space.legal_plays(self.states[:])
 
 		# Bail out early if there is no real random.choice to be made.
@@ -49,48 +48,40 @@ class MonteCarlo(object):
 		print games, datetime.datetime.utcnow() - begin
 
 		# Pick the move with the highest percentage of wins.
-		percent_wins, move = max(
-			(self.wins.get((player, S), 0) /
-			 self.plays.get((player, S), 1),
-			 p)
-			for p, S in moves_states
-		)
+		percent_wins, move = max((self.scores.get(S, 0) / self.plays.get(S, 1), p) for p, S in moves_states)
 
 		# Display the stats for each possible play.
 		for x in sorted(
-			((100 * self.wins.get((player, S), 0) /
-				self.plays.get((player, S), 1),
-				self.wins.get((player, S), 0),
-				self.plays.get((player, S), 0), p)
-				for p, S in moves_states),
-			reverse=True
+			((100 * self.scores.get(S, 0) / self.plays.get(S, 1),
+			self.scores.get(S, 0),
+			self.plays.get(S, 0), p)
+			for p, S in moves_states), reverse=True
 		):
-			print "{3}: {0:.2f}% ({1} / {2})".format(*x)
+			print "{3}: {0:.2f}% ({1:.2f} / {2})".format(*x)
 
 		print "Maximum depth searched:", self.max_depth
 
 		return move
 
 	def run_simulation(self):
-		plays, wins = self.plays, self.wins
+		plays, scores = self.plays, self.scores
 
 		visited_states = set()
 		states_copy = self.states[:]
 		state = states_copy[-1]
-		player = self.design_space.current_player(state)
 
 		expand = True
 		for t in xrange(1, self.max_moves + 1):
 			legal = self.design_space.legal_plays(states_copy)
 			moves_states = [(p, self.design_space.next_state(state, p)) for p in legal]
 
-			if all(plays.get((player, S)) for p, S in moves_states):
+			if all(plays.get(S) for p, S in moves_states):
 				# If we have stats on all of the legal moves here, use them.
 				log_total = math.log(
-					sum(plays[(player, S)] for p, S in moves_states)
+					sum(plays[S] for p, S in moves_states)
 				)
 				value, move, state = max(
-					((wins[(player, S)] / plays[(player, S)]) + self.C * math.sqrt(log_total / plays[(player, S)]), p, S) for p, S in moves_states
+					((scores[S] / plays[S]) + self.C * math.sqrt(log_total / plays[S]), p, S) for p, S in moves_states
 				)
 			else:
 				# Otherwise, just make an arbitrary decision.
@@ -103,23 +94,22 @@ class MonteCarlo(object):
 
 			# `player` here and below refers to the player
 			# who moved into that particular state.
-			if expand and (player, state) not in plays:
+			if expand and state not in plays:
 				expand = False
-				plays[(player, state)] = 0
-				wins[(player, state)] = 0
+				plays[state] = 0
+				scores[state] = 0
 				if t > self.max_depth:
 					self.max_depth = t
 
-			visited_states.add((player, state))
+			visited_states.add(state)
 
-			player = self.design_space.current_player(state)
-			winner = self.design_space.winner(states_copy)
-			if winner:
+			score = self.design_space.score(states_copy)
+			if score is not -1:
 				break
 
-		for player, state in visited_states:
-			if (player, state) not in plays:
+		for state in visited_states:
+			if state not in plays:
 				continue
-			plays[(player, state)] += 1
-			if player == winner:
-				wins[(player, state)] += 1
+			plays[state] += 1
+			if score is not -1:
+				scores[state] += score
