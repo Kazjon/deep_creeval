@@ -9,6 +9,7 @@ from copy import deepcopy
 import os, os.path, pprint, textwrap, csv, importlib, sys, optparse , time, inspect, DUconfig, model_inspector, scipy.misc, scipy.spatial, scipy.stats, sklearn.mixture, matplotlib, qutip, itertools, copy, sklearn.preprocessing, pymc
 
 from collections import OrderedDict, deque, namedtuple
+from math import ceil
 
 from spearmint.utils.database.mongodb import MongoDB
 from spearmint.resources.resource import print_resources_status
@@ -285,6 +286,9 @@ class ConceptualSpace():
 			result["stop"] =  metadata["pretrain_stop"]
 		#pprint(result)
 		return result
+
+	def set_monary_type(self,monary_type):
+		self.fixed_hypers["monary_type"] = monary_type
 
 	def stepwise_train(self,metadata, override_query,sample_limit=0):
 		#metadata["time_slice"] = 1 # Debug measure to speed shit up.
@@ -1664,24 +1668,26 @@ class LSTMConceptualSpace(ConceptualSpace):
 
 class VAEConceptualSpace(ConceptualSpace):
 	fixed_hypers = {"batch_size": 1000,
-					"monitoring_batch_size": 100,
+					"monitoring_batch_size": 500,
 					"save_path": ".",
 					"yaml_path": "../../../../model_yamls/",
 					"layer_fn": "vae",
 					"num_layers": 1,
-					"n_folds": 5,
-	                "nhid_mlp1": 200,
-	                "nhid_mlp2": 200,
+					"n_folds": 2,
+	                #"nhid_mlp1": 200,
+	                #"nhid_mlp2": 200,
 	                "mom_max": 0.95,
-					"monary_type": "exists"
+	                "mom_init": 0.0,
+	                "mom_fin": 0.95,
+	                "max_epochs": 25,
+	                "learn_rate": 1e-4
 	}
-	hyper_space = { "nhid": range(100,301,100),
-	                "mom_init": [.0, .3, .6],#list(np.linspace(0,0.5, 6)),
-	                "mom_fin": [.3, .6, .9],#list(np.linspace(0,1, 6)),
-					#"nhid_mlp1": range(1000,1001,50),
-					#"nhid_mlp2": range(1000,1001,50),
-					"learn_rate": [5e-3, 1e-2, 2e-2],
-					"max_epochs": [50, 100, 150]
+	hyper_space = { "nhid": [50, 100, 200],
+	               #"mom_init": [.0, 0.3],#list(np.linspace(0,0.5, 6)),
+	                #"mom_fin": [.6, .9],#list(np.linspace(0,1, 6)),
+					"nhid_mlp": [500, 1000, 2000],
+					#"nhid_mlp2": [100, 250, 500],
+					#"learn_rate": [1e-3, 5e-3, 1e-2]
 	}
 	def load(self, f):
 		self.model = pickle.load(open(f))
@@ -1832,8 +1838,13 @@ class VAEConceptualSpace(ConceptualSpace):
 
 		print "Mean surprise from data was {0} w/ sigma {1}. Mean surprise from model was {2} w/ sigma {3}.".format(np.mean(max_data_surps,axis=0),np.std(max_data_surps,axis=0),np.mean(max_model_surps,axis=0),np.std(max_model_surps,axis=0))
 
-	def reformulation_test(self,s, n_reform_samples,n_reform_iter=10,reform_drop=False,depth_limit=3,threshold=2, replication=True,same_context=True,same_discovery=True):
-		max, best = self.max_surprise(s, return_best=True)
+	def reformulation_test(self,s, n_reform_samples,n_reform_iter=10,reform_drop=False,depth_limit=3,threshold=2, replication=False,same_context=True,same_discovery=True):
+		if type(s) is list and len(s) == 1:
+			Surprise = namedtuple("Surprise",("discovery","context"))
+			max = s[0]["value"]
+			best = Surprise(discovery=s[0]["discovery"], context=frozenset(s[0]["context"]))
+		else:
+			max, best = self.max_surprise(s, return_best=True)
 		if best is not None:
 			if replication:
 				print "  Generating with replication reformulation using",best
@@ -1890,6 +1901,18 @@ class VAEConceptualSpace(ConceptualSpace):
 								break
 					print ".",
 				print
+
+	def get_dataset_errors(self, metadata, override_query = {}):
+		if len(override_query.keys()):
+			q = override_query
+		else:
+			q = deepcopy(metadata["query"])
+		self.metadata = metadata
+		train_data, test_data = monary_load(self.domain_name,metadata["fields_x"],metadata["fields_y"],find_args=q, split = 0.9, shuffle_split=True, type=self.fixed_hypers["monary_type"])
+		all_data = np.vstack((train_data.X,test_data.X))
+		print "   --- Data loaded."
+		errors = self.recon_cost(all_data)
+		return errors
 
 
 	def inspection_test(self,metadata,override_query, sample_sizes = 10000, n_iter=1000):
@@ -2073,6 +2096,8 @@ class VAEConceptualSpace(ConceptualSpace):
 		print "-----YAML-----"
 		print yaml
 		print "-----------------"
+		if "pylearn2.models.vae.conditional.BernoulliVector" in "".join(yaml):
+			self.fixed_hypers["monary_type"] = "exists"
 		train = yaml_parse.load(yaml)
 		if len(pretrained):
 			train.model = pickle.load(open(pretrained[0]))
@@ -2259,9 +2284,14 @@ class VAEConceptualSpace(ConceptualSpace):
 		return recon,means
 
 	def recon_cost(self, design):
-		if type(design) is list:
-			design = self.design_vector_from_features(design)
-		return self._recon_cost(np.atleast_2d(design))[0]
+		if type(design) is dict:
+			design = np.atleast_2d(self.design_vector_from_features(design))
+		batch_result_list = []
+		for i in range(int(ceil(float(design.shape[0])/self.fixed_hypers["batch_size"]))):
+			d = design[i*self.fixed_hypers["batch_size"]:min((i+1)*self.fixed_hypers["batch_size"],design.shape[0]),:]
+			costs = self._recon_cost(np.atleast_2d(d))
+			batch_result_list.append(costs)
+		return np.concatenate(batch_result_list)
 
 	# Takes dict of features with 0/1 values, sets them, makes everything else 0.
 	def design_vector_from_features(self,features):
@@ -2460,7 +2490,7 @@ class VAEConceptualSpace(ConceptualSpace):
 					i += 1
 					val = recipe["surprise_sets"][i]["value"]
 				if val != float("inf"):
-					self.reformulation_test([recipe["surprise_sets"][i]],100)
+					self.reformulation_test([recipe["surprise_sets"][i]],20)
 
 
 
@@ -2505,7 +2535,7 @@ class VAEConceptualSpace(ConceptualSpace):
 		return m
 
 
-	def __init__(self, domain_name, scratch_path = "", selected_hypers={}, max_epochs = None):
+	def    __init__(self, domain_name, scratch_path = "", selected_hypers={}, max_epochs = None):
 		if max_epochs is not None:
 			self.fixed_hypers["max_epochs"] = max_epochs
 		ConceptualSpace.__init__(self, domain_name, self.hyper_space, self.fixed_hypers, scratch_path = scratch_path,selected_hypers=selected_hypers)
