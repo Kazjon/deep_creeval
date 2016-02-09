@@ -2,15 +2,18 @@ __author__ = 'kazjon'
 import sys
 
 class MCTSDesignSpace(object):
-	def __init__(self, expectation_model, design_features, plausibility_dist, starting_features=(), length_distribution = None, min_moves=3, max_moves=12, end_token = "END"):
+	def __init__(self, expectation_model, design_features, plausibility_distribution=None, length_distribution=None, surprise_distribution=None, score_method = "plausibility", starting_features=(), min_moves=3, max_moves=12, end_token = "END", surprise_depth=1):
 		self.model = expectation_model
 		self.features = design_features
 		self.starting_features = starting_features
-		self.plausibility_dist = plausibility_dist
+		self.plausibility_dist = plausibility_distribution
+		self.surprise_dist = surprise_distribution
+		self.length_dist = length_distribution
 		self.end_token = end_token
 		self.min_moves = min_moves
 		self.max_moves = max_moves
-		self.length_dist = length_distribution
+		self.score_method = score_method
+		self.surprise_depth = surprise_depth
 
 	def start(self):
 		# Returns a representation of the starting state of the game.
@@ -57,8 +60,23 @@ class MCTSDesignSpace(object):
 		# game history.  If the design is complete, return its score.
 		# Otherwise return -1.
 		if self.end_token in state_history[-1]:
-			dict_state = {f:1 for f in state_history[-1]}
-			ll = -self.model.recon_cost(dict_state)[0]
-			score = 1 - min(1,(max(0,ll + self.plausibility_dist["max"]))/-self.plausibility_dist["min"])
-			return score
+			if self.score_method == "plausibility":
+				return self.plausibility_score(state_history[-1])
+			if self.score_method == "surprise":
+				return self.surprise_score(state_history[-1])
 		return -1
+
+	def plausibility_score(self, state):
+		dict_state = {f:1 for f in state}
+		ll = -self.model.recon_cost(dict_state)[0]
+		score = 1 - min(1,(max(0,ll + self.plausibility_dist["max"]))/-self.plausibility_dist["min"])
+		return score
+
+	def surprise_score(self, state):
+		surprises = self.model.surprising_sets(list(state)[:-1],depth_limit=self.surprise_depth,n_iter=10)
+		surp_list = self.model.sorted_surprise(surprises)
+		max_surp = self.model.max_surprise(surp_list)
+		avg_surp = self.model.avg_surprise(surp_list)
+		max_surp = min(1,max(0,max_surp-self.surprise_dist["min"])/(self.surprise_dist["max"]-self.surprise_dist["min"]))
+		avg_surp = min(1,max(0,avg_surp-self.surprise_dist["min"])/(self.surprise_dist["max"]-self.surprise_dist["min"]))
+		return max_surp-avg_surp

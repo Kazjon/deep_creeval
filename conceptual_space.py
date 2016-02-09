@@ -6,7 +6,7 @@ import AnimTSNE_experiment
 import monary
 from copy import deepcopy
 
-import os, os.path, pprint, textwrap, csv, importlib, sys, optparse , time, inspect, DUconfig, model_inspector, scipy.misc, scipy.spatial, scipy.stats, sklearn.mixture, matplotlib, qutip, itertools, copy, sklearn.preprocessing, pymc
+import os, os.path, pprint, textwrap, csv, importlib, sys, optparse , time, inspect, DUconfig, model_inspector, scipy.misc, scipy.spatial, scipy.stats, sklearn.mixture, matplotlib, qutip, itertools, copy, sklearn.preprocessing, pymc, ast
 
 from collections import OrderedDict, deque, namedtuple
 from math import ceil
@@ -1716,6 +1716,12 @@ class VAEConceptualSpace(ConceptualSpace):
 		R = self.model.log_likelihood_approximation(I5, 20)
 		self._recon_cost = theano.function([I5],R, allow_input_downcast=True)
 
+		R = self.model.sample(hypers["batch_size"], return_sample_means=False)
+		self._sample = theano.function([],R)
+
+		self.sampled_designs = None
+		self.known_surprise_contexts = {}
+
 	def reconstruct_and_return(self, X, noisy_encoding=False, return_sample_means=True):
 		epsilon = self.model.sample_from_epsilon((X.shape[0], self.model.nhid))
 		if not noisy_encoding:
@@ -2225,46 +2231,96 @@ class VAEConceptualSpace(ConceptualSpace):
 		else:
 			return deep_recon_error
 
+	def precalculate_conditional_dists(self,depth=1, from_file=True, file_path=None):
+		sdict = {}
+		if from_file and file_path is not None and os.path.exists(file_path):
+			#Grab our previously saved conditional dists csv.
+			with open(file_path, "rb") as f:
+				reader = csv.reader(f)
+				stats = reader.next()
+				sdict = {"min":float(stats[0]),"mean":float(stats[1]),"max":float(stats[2])}
+				for row in reader:
+					self.known_surprise_contexts[ast.literal_eval(row[0])] = [float(i) for i in row[1:]]
+			print "-- Loaded conditional dists from file."
+		else:
+			print "-- Calculating conditional dists."
+			if self.sampled_designs is None:
+				self.gen_surprise_samples()
+			contexts = itertools.chain.from_iterable([itertools.combinations(self.metadata["fields_x"], d) for d in range(1,depth+1)])
+			count = 0
+			sdict["min"] = float("inf")
+			sdict["max"] = -1
+			total_surp = 0.0
+			for context in contexts:
+				surps = self.estimate_conditional_dists(context)
+				minsurp_index = np.argmax(surps) # min=max and max=min because we're after the log values (high probability = low surprise)
+				minsurp = -np.log2(surps[minsurp_index]) + np.log2(self.sample_means[minsurp_index])
+				if minsurp < sdict["min"]:
+					sdict["min"] = minsurp
+				maxsurp_index = np.argmin(surps)
+				maxsurp = -np.log2(surps[maxsurp_index]) + np.log2(self.sample_means[maxsurp_index])
+				total_surp += sum([-np.log2(surps[i]) + np.log2(self.sample_means[i]) for i in range(len(self.metadata["fields_x"]))])
+				if maxsurp > sdict["max"]:
+					sdict["max"] = maxsurp
+				self.known_surprise_contexts[context] = surps
+				count +=1
+				if count % 1000 == 0:
+					print count
+			sdict["mean"] = total_surp/(float(count)*len(self.metadata["fields_x"]))
+			if file_path is not None:
+				with open(file_path,"wb") as f:
+					writer = csv.writer(f)
+					writer.writerow([sdict["min"],sdict["mean"],sdict["max"]])
+					writer.writerows([k]+v.tolist() for k,v in self.known_surprise_contexts.iteritems())
+					print "-- Saved conditional dists to file."
+		return sdict
+
+
 	def estimate_conditional_dists(self, observed, samples=10000, probs="random", n_iter=1, verbose=False, return_samples = False, drop_bad_recons=False):
-		if type(observed) == list:
-			observed = {i:1 for i in observed}
-		designs = self.partial_design_vector_from_features(observed, n=samples, fill=probs)
-		if verbose:
-			print "observed:", observed
-			print "probs:",probs
-			print designs
-		rec = self.reconstruct(designs,True)
-		recs = [rec[1].mean(axis=0)]
-		for i in range(n_iter-1):
-			for d in observed.keys():
-				rec[0][:,self.metadata["fields_x"].index(d)] = observed[d]
-			rec = self.reconstruct(rec[0],True)
-			recs.append(rec[1].mean(axis=0))
+		if tuple(observed) in self.known_surprise_contexts:
+			return self.known_surprise_contexts[tuple(observed)]
+		else:
+			if type(observed) in [list,tuple]:
+				observed = {i:1 for i in observed}
+			designs = self.partial_design_vector_from_features(observed, n=samples, fill=probs)
 			if verbose:
-				print rec[0]
-		sums = np.zeros(len(self.metadata["fields_x"]))
-		count = 0.0
-		for samp,means in zip(rec[0],rec[1]):
-			if all([samp[self.metadata["fields_x"].index(d)] == observed[d] for d in observed.keys()]):
-				sums += means
-				count += 1.0
-		sums /= count
-		#if observed.keys():
-			#print "  For condition {0}, succeeded with {1} after {2} iterations.".format(observed,count,n_iter)
-			#print "newmeans",sums
-			#print "oldmeans",rec[1].mean(axis=0)
-		if verbose:
-			print rec[1].mean(axis=0)
-		if drop_bad_recons:
+				print "observed:", observed
+				print "probs:",probs
+				print designs
+			rec = self.reconstruct(designs,True)
+			recs = [rec[1].mean(axis=0)]
+			for i in range(n_iter-1):
+				for d in observed.keys():
+					rec[0][:,self.metadata["fields_x"].index(d)] = observed[d]
+				rec = self.reconstruct(rec[0],True)
+				recs.append(rec[1].mean(axis=0))
+				if verbose:
+					print rec[0]
+			sums = np.zeros(len(self.metadata["fields_x"]))
+			count = 0.0
+			for samp,means in zip(rec[0],rec[1]):
+				if all([samp[self.metadata["fields_x"].index(d)] == observed[d] for d in observed.keys()]):
+					sums += means
+					count += 1.0
+			sums /= count
+			#if observed.keys():
+				#print "  For condition {0}, succeeded with {1} after {2} iterations.".format(observed,count,n_iter)
+				#print "newmeans",sums
+				#print "oldmeans",rec[1].mean(axis=0)
+			if verbose:
+				print rec[1].mean(axis=0)
+			if drop_bad_recons:
+				#self.known_surprise_contexts[frozenset(observed)] = sums
+				if return_samples:
+					return sums,rec[0]
+				return sums
+			#self.known_surprise_contexts[frozenset(observed)] = rec[1].mean(axis=0)
 			if return_samples:
-				return sums,rec[0]
-			return sums
-		if return_samples:
-			return rec[1].mean(axis=0), rec[0]
-		return rec[1].mean(axis=0)
-		#print "Reconstruction means:"
-		#print recs
-		#print
+				return rec[1].mean(axis=0), rec[0]
+			return rec[1].mean(axis=0)
+			#print "Reconstruction means:"
+			#print recs
+			#print
 
 
 	def reconstruct(self, design, noisy_encoding=False, return_all=False):
@@ -2359,6 +2415,7 @@ class VAEConceptualSpace(ConceptualSpace):
 			surprisals = {d:-np.log2(sample_means[self.metadata["fields_x"].index(d)]) - mean_ing_likelihood for d in design}
 		return surprisals
 
+
 	def print_surprise(self, surps, prefix=""):
 		for s in surps:
 			print str(prefix)+"  {0} given {1}: {2:.3f} wows.".format(s.discovery,list(s.context),surps[s])
@@ -2378,22 +2435,31 @@ class VAEConceptualSpace(ConceptualSpace):
 			return 0,None
 		return 0
 
+	def avg_surprise(self, surps):
+		if type(surps) is dict:
+			surps = self.sorted_surprise(surps)
+		if len(surps):
+			ks,vs = zip(*surps)
+			return np.mean(vs)
+		return 0
+
+	def gen_surprise_samples(self):
+		self.sampled_designs = np.zeros((self.metadata["surprise_samples"],len(self.metadata["fields_x"])))
+
+		print "-- Generating samples:"
+		for i in range(self.metadata["surprise_samples"]/self.fixed_hypers["batch_size"]):
+			self.sampled_designs[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:] = self._sample()
+		self.sample_means = np.array(self.sampled_designs).mean(axis=0)
+		print "-- Sampling complete."
+
 	def surprising_sets(self, design, fixed_context=None, fixed_discovery=None, threshold=2, drop_threshold= None, depth_limit = None, beam_width=-1, n_samples=10000, probs="random", n_iter=25, drop_bad=True):
 		openlist = deque([frozenset([])]) # Initialise the queue to just the empty set
 		closedlist = set()
 		foundlist = {}
 		Surprise = namedtuple("Surprise",("discovery","context"))
 
-		batch_size = 1000
-		R = self.model.sample(min(batch_size,n_samples), return_sample_means=False)
-		_sample = theano.function([],R)
-
-		sampled_designs = np.zeros((n_samples,len(self.metadata["fields_x"])))
-
-		print "   --Generating samples:"
-		for i in range(n_samples/batch_size):
-			sampled_designs[i*batch_size:(i+1)*batch_size,:] = _sample()
-		sample_means = np.array(sampled_designs).mean(axis=0)
+		if self.sampled_designs is None:
+			self.gen_surprise_samples()
 		'''
 		if mode == "exhaustive":
 			while len(openlist):
@@ -2412,14 +2478,14 @@ class VAEConceptualSpace(ConceptualSpace):
 				closedlist.update(additions)
 		elif type(mode) is tuple and mode[0] == "beam":
 			'''
-		print "   --Evaluating surprise."
+		#print "   --Evaluating surprise."
 		openlist = [(0,frozenset([]))]
 		if fixed_context is not None:
 			context_list = itertools.chain.from_iterable(itertools.combinations(fixed_context, r) for r in range(1,len(fixed_context)+1))
 			openlist = [(0,frozenset(c)) for c in context_list]
 		while len(openlist):
 			context = heapq.heappop(openlist)[1]#openlist.popleft()[1]
-			candidate_surprisals = self.estimate_surprise_given_context(design, list(context), n_samples, probs, n_iter, drop_bad, sample_means = sample_means)
+			candidate_surprisals = self.estimate_surprise_given_context(design, list(context), n_samples, probs, n_iter, drop_bad, sample_means = self.sample_means)
 			if fixed_discovery is None:
 				foundlist.update({Surprise(discovery=c,context=context): candidate_surprisals[c] for c in candidate_surprisals.keys() if candidate_surprisals[c] > threshold})
 			else:

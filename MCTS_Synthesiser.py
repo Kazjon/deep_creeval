@@ -1,4 +1,4 @@
-import argparse, pymongo, sys
+import argparse, pymongo, sys, pprint
 
 import numpy as np
 from conceptual_space import *
@@ -39,8 +39,9 @@ def init_dataset(dataset):
 		print "No datasets entry for",dataset,"was found."
 		sys.exit()
 
-def init_model(dataset, metadata, model_path):
+def init_model(dataset, metadata, model_path, surprise_depth):
 	#Initialise the VAE from the given file.
+	dataset_changed = False
 	print "Initalising a VAE from the model file at",model_path+"."
 	model = globals()[metadata['model_class']](dataset, "data/",selected_hypers=metadata["best_hypers"])
 	if "monary_type" in metadata.keys():
@@ -48,7 +49,9 @@ def init_model(dataset, metadata, model_path):
 	model.load(model_path)
 	model.init_model_functions()
 	model.metadata = metadata
-	if "plausibility_distribution" not in metadata.keys():
+	conditional_dists_file = model_path[:-4]+"_surpdist_"+str(surprise_depth)+".csv"
+	metadata["surprise_distribution"] = model.precalculate_conditional_dists(from_file=True,file_path=conditional_dists_file, depth=surprise_depth)
+	if "plausibility_distribution" not in metadata:
 		print "Generating distribution over plausibility for each design in the dataset."
 		plausibilities = model.get_dataset_errors(metadata)
 		print "plausibilities.shape",plausibilities.shape
@@ -60,6 +63,8 @@ def init_model(dataset, metadata, model_path):
 		plaus_dist["mean"] = float(np.average(plausibilities))
 		print "plaus_dist",plaus_dist
 		metadata["plausibility_distribution"] = plaus_dist
+		dataset_changed = True
+	if dataset_changed:
 		print "Saving updates to the",dataset,"dataset entry."
 		client = pymongo.MongoClient()
 		db = client.creeval
@@ -76,19 +81,31 @@ if __name__ == "__main__":
 	args = parser.parse_args()
 
 	metadata = init_dataset(args.dataset)
-	model = init_model(args.dataset, metadata, args.model)
 
-	min_ing = 5
-	max_ing = 12
+	if not "surprise samples" in metadata:
+		metadata["surprise_samples"] = 10000
+
+
+	min_ing = 1
+	max_ing = 6
 	seconds_per_action = 60
+	C = 2
+	keep_best = 10
+	score_method = "surprise"
+	surprise_depth=2
 
-	design_space = MCTSDesignSpace(model,metadata["fields_x"], metadata["plausibility_distribution"], length_distribution=metadata["length_distribution"], min_moves=min_ing, max_moves=max_ing)
-	mcts = MonteCarlo(design_space, max_moves=max_ing, time=seconds_per_action, C=2, heavy_playouts=True)
+
+	model = init_model(args.dataset, metadata, args.model, surprise_depth)
+	design_space = MCTSDesignSpace(model,metadata["fields_x"], plausibility_distribution=metadata["plausibility_distribution"], length_distribution=metadata["length_distribution"], surprise_distribution=metadata["surprise_distribution"], min_moves=min_ing, max_moves=max_ing, score_method=score_method, surprise_depth=surprise_depth)
+	mcts = MonteCarlo(design_space, max_moves=max_ing, time=seconds_per_action, C=C, heavy_playouts=True, keep_best=keep_best)
 	mcts.start()
 	for _ in range(max_ing):
 		ing = mcts.get_play()
 		mcts.update(ing)
 		print "Ingredient selected:",ing
 		print "Current state:",mcts.states[-1]
+		print "Best",keep_best,"recipes found so far:"
+		for i,r in enumerate(mcts.get_best()):
+			print str(i+1)+": ",r[0],"score:",r[1]
 		if ing == design_space.end_token:
 			break

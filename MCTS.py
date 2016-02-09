@@ -1,5 +1,6 @@
 from __future__ import division
 import datetime, random, math, sys, itertools, bisect
+from pprint import pprint
 
 
 class MonteCarlo(object):
@@ -12,6 +13,9 @@ class MonteCarlo(object):
 		self.calculation_time = datetime.timedelta(seconds=seconds)
 		self.max_moves = kwargs.get('max_moves', 30)
 		self.min_moves = kwargs.get('min_moves', 3)
+		self.keep_best = kwargs.get('keep_best', 1)
+		self.best = {}
+		self.best_thresh = 0
 		self.C = kwargs.get('C', 1.4)
 		self.scores = {}
 		self.plays = {}
@@ -22,6 +26,9 @@ class MonteCarlo(object):
 
 	def update(self, feature):
 		self.states.append(self.design_space.next_state(self.states[-1],feature))
+
+	def get_best(self):
+		return sorted(zip(self.best.keys(),self.best.values()), key=lambda x:x[1],reverse=True)
 
 	def get_play(self):
 		print "total_games",sum(self.plays.values())
@@ -64,7 +71,7 @@ class MonteCarlo(object):
 
 		return move
 
-	def run_simulation(self):
+	def run_simulation(self, verbose=False):
 		plays, scores = self.plays, self.scores
 
 		visited_states = set()
@@ -110,6 +117,14 @@ class MonteCarlo(object):
 
 			score = self.design_space.score(states_copy)
 			if score is not -1:
+				if score > self.best_thresh and state not in self.best.keys():
+					new_best = zip(self.best.keys()+[state],self.best.values()+[score])
+					new_best.sort(key=lambda x:x[1],reverse=True)
+					new_best = new_best[:self.keep_best]
+					self.best_thresh = new_best[-1][1]
+					self.best = dict(new_best)
+					if verbose:
+						print "    New top-"+str(self.keep_best)+" design:",state,"score:",score
 				break
 
 		for state in visited_states:
