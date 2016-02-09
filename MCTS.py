@@ -1,5 +1,5 @@
 from __future__ import division
-import datetime, random, math, sys
+import datetime, random, math, sys, itertools, bisect
 
 
 class MonteCarlo(object):
@@ -12,10 +12,10 @@ class MonteCarlo(object):
 		self.calculation_time = datetime.timedelta(seconds=seconds)
 		self.max_moves = kwargs.get('max_moves', 30)
 		self.min_moves = kwargs.get('min_moves', 3)
-		self.length_distribution = kwargs.get("length_distribution")
 		self.C = kwargs.get('C', 1.4)
 		self.scores = {}
 		self.plays = {}
+		self.heavy_playouts = kwargs.get('heavy_playouts', False)
 
 	def start(self):
 		self.states.append(self.design_space.start())
@@ -24,6 +24,7 @@ class MonteCarlo(object):
 		self.states.append(self.design_space.next_state(self.states[-1],feature))
 
 	def get_play(self):
+		print "total_games",sum(self.plays.values())
 		self.max_depth = 0
 		state = self.states[-1]
 		legal = self.design_space.legal_plays(self.states[:])
@@ -57,7 +58,7 @@ class MonteCarlo(object):
 			self.plays.get(S, 0), p)
 			for p, S in moves_states), reverse=True
 		):
-			print "{3}: {0:.2f}% ({1:.2f} / {2})".format(*x)
+			print "{3}: {0:.2f}% ({1:.2f}/{2})".format(*x)
 
 		print "Maximum depth searched:", self.max_depth
 
@@ -85,15 +86,19 @@ class MonteCarlo(object):
 				)
 			else:
 				# Otherwise, just make an arbitrary decision.
-				move, state = random.choice(moves_states)
+				if self.heavy_playouts:
+					play_dist = self.design_space.play_dist(states_copy,legal)
+					cumdist = [sum([play_dist[i] for i in legal[0:legal.index(p)+1]]) for p in legal]
+					x = random.random() * cumdist[-1]
+					move, state = moves_states[bisect.bisect(cumdist, x)]
+				else:
+					move, state = random.choice(moves_states)
 
 			if type(state) is tuple:
 				states_copy.append(state)
 			else:
 				states_copy.append((state,))
 
-			# `player` here and below refers to the player
-			# who moved into that particular state.
 			if expand and state not in plays:
 				expand = False
 				plays[state] = 0

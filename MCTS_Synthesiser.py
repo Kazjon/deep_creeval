@@ -78,12 +78,12 @@ if __name__ == "__main__":
 	metadata = init_dataset(args.dataset)
 	model = init_model(args.dataset, metadata, args.model)
 
-	min_ing = 4
+	min_ing = 5
 	max_ing = 12
 	seconds_per_action = 60
 
-	design_space = MCTSDesignSpace(model,metadata["fields_x"], metadata["plausibility_distribution"], min_moves=min_ing, max_moves=max_ing)
-	mcts = MonteCarlo(design_space, length_distribution=metadata["length_distribution"], max_moves=max_ing, time=seconds_per_action)
+	design_space = MCTSDesignSpace(model,metadata["fields_x"], metadata["plausibility_distribution"], length_distribution=metadata["length_distribution"], min_moves=min_ing, max_moves=max_ing)
+	mcts = MonteCarlo(design_space, max_moves=max_ing, time=seconds_per_action, C=2, heavy_playouts=True)
 	mcts.start()
 	for _ in range(max_ing):
 		ing = mcts.get_play()
