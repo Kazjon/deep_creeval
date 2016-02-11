@@ -2240,7 +2240,7 @@ class VAEConceptualSpace(ConceptualSpace):
 				stats = reader.next()
 				sdict = {"min":float(stats[0]),"mean":float(stats[1]),"max":float(stats[2])}
 				for row in reader:
-					self.known_surprise_contexts[ast.literal_eval(row[0])] = [float(i) for i in row[1:]]
+					self.known_surprise_contexts[frozenset(ast.literal_eval(row[0]))] = [float(i) for i in row[1:]]
 			print "-- Loaded conditional dists from file."
 		else:
 			print "-- Calculating conditional dists."
@@ -2262,7 +2262,7 @@ class VAEConceptualSpace(ConceptualSpace):
 				total_surp += sum([-np.log2(surps[i]) + np.log2(self.sample_means[i]) for i in range(len(self.metadata["fields_x"]))])
 				if maxsurp > sdict["max"]:
 					sdict["max"] = maxsurp
-				self.known_surprise_contexts[context] = surps
+				self.known_surprise_contexts[frozenset(context)] = surps
 				count +=1
 				if count % 1000 == 0:
 					print count
@@ -2271,22 +2271,24 @@ class VAEConceptualSpace(ConceptualSpace):
 				with open(file_path,"wb") as f:
 					writer = csv.writer(f)
 					writer.writerow([sdict["min"],sdict["mean"],sdict["max"]])
-					writer.writerows([k]+v.tolist() for k,v in self.known_surprise_contexts.iteritems())
+					writer.writerows([list(k)]+v.tolist() for k,v in self.known_surprise_contexts.iteritems())
 					print "-- Saved conditional dists to file."
 		return sdict
 
 
 	def estimate_conditional_dists(self, observed, samples=10000, probs="random", n_iter=1, verbose=False, return_samples = False, drop_bad_recons=False):
-		if tuple(observed) in self.known_surprise_contexts:
-			return self.known_surprise_contexts[tuple(observed)]
+		if verbose:
+			print "observed:",observed,
+		if frozenset(observed) in self.known_surprise_contexts:
+			if verbose:
+				print " in known context."
+			return self.known_surprise_contexts[frozenset(observed)]
 		else:
+			if verbose:
+				print " for the first time."
 			if type(observed) in [list,tuple]:
 				observed = {i:1 for i in observed}
 			designs = self.partial_design_vector_from_features(observed, n=samples, fill=probs)
-			if verbose:
-				print "observed:", observed
-				print "probs:",probs
-				print designs
 			rec = self.reconstruct(designs,True)
 			recs = [rec[1].mean(axis=0)]
 			for i in range(n_iter-1):
@@ -2294,8 +2296,6 @@ class VAEConceptualSpace(ConceptualSpace):
 					rec[0][:,self.metadata["fields_x"].index(d)] = observed[d]
 				rec = self.reconstruct(rec[0],True)
 				recs.append(rec[1].mean(axis=0))
-				if verbose:
-					print rec[0]
 			sums = np.zeros(len(self.metadata["fields_x"]))
 			count = 0.0
 			for samp,means in zip(rec[0],rec[1]):
@@ -2303,12 +2303,6 @@ class VAEConceptualSpace(ConceptualSpace):
 					sums += means
 					count += 1.0
 			sums /= count
-			#if observed.keys():
-				#print "  For condition {0}, succeeded with {1} after {2} iterations.".format(observed,count,n_iter)
-				#print "newmeans",sums
-				#print "oldmeans",rec[1].mean(axis=0)
-			if verbose:
-				print rec[1].mean(axis=0)
 			if drop_bad_recons:
 				#self.known_surprise_contexts[frozenset(observed)] = sums
 				if return_samples:
@@ -2318,9 +2312,6 @@ class VAEConceptualSpace(ConceptualSpace):
 			if return_samples:
 				return rec[1].mean(axis=0), rec[0]
 			return rec[1].mean(axis=0)
-			#print "Reconstruction means:"
-			#print recs
-			#print
 
 
 	def reconstruct(self, design, noisy_encoding=False, return_all=False):

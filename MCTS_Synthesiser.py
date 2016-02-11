@@ -83,7 +83,7 @@ if __name__ == "__main__":
 	metadata = init_dataset(args.dataset)
 
 	if not "surprise samples" in metadata:
-		metadata["surprise_samples"] = 10000
+		metadata["surprise_samples"] = 100000
 
 
 	min_ing = 1
@@ -92,13 +92,14 @@ if __name__ == "__main__":
 	C = 2
 	keep_best = 10
 	score_method = "surprise"
-	surprise_depth=2
+	surprise_depth=3
 
 
 	model = init_model(args.dataset, metadata, args.model, surprise_depth)
 	design_space = MCTSDesignSpace(model,metadata["fields_x"], plausibility_distribution=metadata["plausibility_distribution"], length_distribution=metadata["length_distribution"], surprise_distribution=metadata["surprise_distribution"], min_moves=min_ing, max_moves=max_ing, score_method=score_method, surprise_depth=surprise_depth)
 	mcts = MonteCarlo(design_space, max_moves=max_ing, time=seconds_per_action, C=C, heavy_playouts=True, keep_best=keep_best)
 	mcts.start()
+	print len(model.known_surprise_contexts.keys())
 	for _ in range(max_ing):
 		ing = mcts.get_play()
 		mcts.update(ing)
