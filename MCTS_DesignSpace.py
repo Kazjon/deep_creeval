@@ -2,6 +2,9 @@ __author__ = 'kazjon'
 import sys
 import numpy as np
 
+from Synthesis_Evaluators import plausibility_score, surprise_score
+
+
 class MCTSDesignSpace(object):
 	def __init__(self, expectation_model, design_features, plausibility_distribution=None, length_distribution=None, surprise_distribution=None, errors_by_length=None, score_method = "plausibility", starting_features=(), min_moves=3, max_moves=12, end_token = "END", surprise_depth=1):
 		self.model = expectation_model
@@ -11,6 +14,8 @@ class MCTSDesignSpace(object):
 		self.surprise_dist = surprise_distribution
 		self.length_dist = length_distribution
 		self.errors_by_length = errors_by_length
+		if errors_by_length is not None:
+			self.weight_plaus_by_length = True
 		self.end_token = end_token
 		self.min_moves = min_moves
 		self.max_moves = max_moves
@@ -63,28 +68,11 @@ class MCTSDesignSpace(object):
 		# Otherwise return -1.
 		if self.end_token in state_history[-1]:
 			if self.score_method == "plausibility":
-				return self.plausibility_score(state_history[-1])
+				return plausibility_score(state_history[-1], self.model, self.plausibility_dist, self.weight_plaus_by_length, self.errors_by_length)
 			if self.score_method == "surprise":
-				return self.surprise_score(state_history[-1])
+				return surprise_score(state_history[-1], self.model, self.end_token, self.surprise_dist, self.surprise_depth)
 			if self.score_method == "plausibility+surprise":
-				return (self.plausibility_score(state_history[-1]) + self.surprise_score(state_history[-1]))/2.0
+				plaus = plausibility_score(state_history[-1], self.model, self.plausibility_dist, self.weight_plaus_by_length, self.errors_by_length)
+				surp = surprise_score(state_history[-1], self.model, self.end_token, self.surprise_dist, self.surprise_depth)
+				return (plaus + surp)/2.0
 		return -1
-
-	def plausibility_score(self, state, weight_by_length=True):
-		dict_state = {f:1 for f in state}
-		ll = -self.model.recon_cost(dict_state)[0]
-		score = 1 - min(1,(max(0,ll + self.plausibility_dist["max"]))/-self.plausibility_dist["min"])
-		if weight_by_length:
-			score *= np.exp(self.plausibility_dist["mean"]) / np.exp(self.errors_by_length[len(dict_state.keys())-1]) #Subtract one because of the END token
-		return score
-
-	def surprise_score(self, state):
-		state = set(state)
-		state.remove(self.end_token)
-		surprises = self.model.surprising_sets(list(state),depth_limit=self.surprise_depth,n_iter=10)
-		surp_list = self.model.sorted_surprise(surprises)
-		max_surp = self.model.max_surprise(surp_list)
-		avg_surp = self.model.avg_surprise(surp_list)
-		max_surp = min(1,max(0,max_surp-self.surprise_dist["min"])/(self.surprise_dist["max"]-self.surprise_dist["min"]))
-		avg_surp = min(1,max(0,avg_surp-self.surprise_dist["min"])/(self.surprise_dist["max"]-self.surprise_dist["min"]))
-		return max_surp #-avg_surp

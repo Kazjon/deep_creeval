@@ -36,5 +36,5 @@ exec 1>$PBS_O_WORKDIR/$PBS_JOBNAME-$SHORT_JOBID.out  2>$PBS_O_WORKDIR/$PBS_JOBNA
 ### run job
 ./startmongo.sh
 cd deep_creeval
-python deep_creeval.py soup_recipes_0.05 -m train_exp --sample_limit 0 --exp_name soup_recipes_0.05_holistic
+python deep_creeval.py mmf_0.01 -m train_exp --sample_limit 0 --exp_name mmf_0.01_z5
 kill -9 `pidof mongod`

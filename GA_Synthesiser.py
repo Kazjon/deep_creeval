@@ -4,6 +4,7 @@ import numpy as np
 from conceptual_space import *
 from deap import base, creator, tools
 
+from Synthesis_Evaluators import plausibility_score, surprise_score
 
 def init_dataset(dataset):
 	client = pymongo.MongoClient()
@@ -70,9 +71,15 @@ def init_model(dataset, metadata, model_path, surprise_depth):
 		db.datasets.save(metadata)
 	return model
 
-def init_GA():
+def init_GA(ndims):
 	creator.create("MaxFitness", base.Fitness, weights=(1.0,))
 	creator.create("Individual", set, fitness=creator.MaxFitness)
+	toolbox = base.Toolbox()
+	toolbox.register("attribute", random.gauss(0,1))
+	toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attribute, n=ndims)
+	toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+
+	return None
 
 if __name__ == "__main__":
 	print "Started GA_Synthesiser."
@@ -89,10 +96,10 @@ if __name__ == "__main__":
 
 	score_method = "plausibility"
 	surprise_depth=3
-
-	init_GA()
-
 	model = init_model(args.dataset, metadata, args.model, surprise_depth)
+
+	ga = init_GA(model.hypers["nhid"])
+
 	design_space = MCTSDesignSpace(model,metadata["fields_x"], plausibility_distribution=metadata["plausibility_distribution"], length_distribution=metadata["length_distribution"], surprise_distribution=metadata["surprise_distribution"], errors_by_length=metadata["errors_by_length"], min_moves=min_ing, max_moves=max_ing, score_method=score_method, surprise_depth=surprise_depth)
 	mcts = MonteCarlo(design_space, max_moves=max_ing, time=seconds_per_action, C=C, heavy_playouts=True, keep_best=keep_best)
 	mcts.start()
