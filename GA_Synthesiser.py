@@ -1,11 +1,9 @@
-import argparse, pymongo, sys, pprint
+import argparse, pymongo, sys, pprint, random
 
 import numpy as np
 from conceptual_space import *
-from MCTS_DesignSpace import MCTSDesignSpace
-from MCTS import MonteCarlo
+from deap import base, creator, tools
 
-__author__ = 'kazjon'
 
 def init_dataset(dataset):
 	client = pymongo.MongoClient()
@@ -72,9 +70,12 @@ def init_model(dataset, metadata, model_path, surprise_depth):
 		db.datasets.save(metadata)
 	return model
 
+def init_GA():
+	creator.create("MaxFitness", base.Fitness, weights=(1.0,))
+	creator.create("Individual", set, fitness=creator.MaxFitness)
 
 if __name__ == "__main__":
-	print "Started MCTS_Synthesiser."
+	print "Started GA_Synthesiser."
 	parser = argparse.ArgumentParser(description='Use this to generate designs given an existing VAE model')
 	parser.add_argument('--dataset',help="Name of the dataset to work with")
 	parser.add_argument("--model",help="Path to the .pkl file containing the trained expectation model VAE.", default=None)
@@ -86,15 +87,10 @@ if __name__ == "__main__":
 	if not "surprise samples" in metadata:
 		metadata["surprise_samples"] = 100000
 
-
-	min_ing = 1
-	max_ing = 8
-	seconds_per_action = 30
-	C = 2
-	keep_best = 10
 	score_method = "plausibility"
 	surprise_depth=3
 
+	init_GA()
 
 	model = init_model(args.dataset, metadata, args.model, surprise_depth)
 	design_space = MCTSDesignSpace(model,metadata["fields_x"], plausibility_distribution=metadata["plausibility_distribution"], length_distribution=metadata["length_distribution"], surprise_distribution=metadata["surprise_distribution"], errors_by_length=metadata["errors_by_length"], min_moves=min_ing, max_moves=max_ing, score_method=score_method, surprise_depth=surprise_depth)

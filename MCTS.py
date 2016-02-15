@@ -2,6 +2,7 @@ from __future__ import division
 import datetime, random, math, sys, itertools, bisect
 from pprint import pprint
 
+#MCTS Implementation based on tutorial at https://jeffbradberry.com/posts/2015/09/intro-to-monte-carlo-tree-search/
 
 class MonteCarlo(object):
 	def __init__(self, design_space, **kwargs):
@@ -94,17 +95,16 @@ class MonteCarlo(object):
 			else:
 				# Otherwise, just make an arbitrary decision.
 				if self.heavy_playouts:
-					play_dist = self.design_space.play_dist(states_copy,legal)
-					cumdist = [sum([play_dist[i] for i in legal[0:legal.index(p)+1]]) for p in legal]
+					legal_list = list(legal)
+					play_dist = self.design_space.play_dist(states_copy,legal_list)
+					cumdist = [sum([play_dist[i] for i in legal_list[0:legal_list.index(p)+1]]) for p in legal_list]
 					x = random.random() * cumdist[-1]
 					move, state = moves_states[bisect.bisect(cumdist, x)]
 				else:
 					move, state = random.choice(moves_states)
 
-			if type(state) is tuple:
-				states_copy.append(state)
-			else:
-				states_copy.append((state,))
+
+			states_copy.append(frozenset(state))
 
 			if expand and state not in plays:
 				expand = False

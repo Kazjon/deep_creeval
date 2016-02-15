@@ -1673,7 +1673,7 @@ class VAEConceptualSpace(ConceptualSpace):
 					"yaml_path": "../../../../model_yamls/",
 					"layer_fn": "vae",
 					"num_layers": 1,
-					"n_folds": 2,
+					"n_folds": 5,
 	                #"nhid_mlp1": 200,
 	                #"nhid_mlp2": 200,
 	                "mom_max": 0.95,
@@ -1682,10 +1682,10 @@ class VAEConceptualSpace(ConceptualSpace):
 	                "max_epochs": 25,
 	                "learn_rate": 1e-4
 	}
-	hyper_space = { "nhid": [50, 100, 200],
+	hyper_space = { "nhid": [3, 5, 10, 20],
 	               #"mom_init": [.0, 0.3],#list(np.linspace(0,0.5, 6)),
 	                #"mom_fin": [.6, .9],#list(np.linspace(0,1, 6)),
-					"nhid_mlp": [500, 1000, 2000],
+					"nhid_mlp": [100, 200, 500],
 					#"nhid_mlp2": [100, 250, 500],
 					#"learn_rate": [1e-3, 5e-3, 1e-2]
 	}
@@ -1908,7 +1908,7 @@ class VAEConceptualSpace(ConceptualSpace):
 					print ".",
 				print
 
-	def get_dataset_errors(self, metadata, override_query = {}):
+	def get_dataset_errors(self, metadata, override_query = {}, return_averages_by_length=False):
 		if len(override_query.keys()):
 			q = override_query
 		else:
@@ -1918,7 +1918,27 @@ class VAEConceptualSpace(ConceptualSpace):
 		all_data = np.vstack((train_data.X,test_data.X))
 		print "   --- Data loaded."
 		errors = self.recon_cost(all_data)
-		return errors
+		if return_averages_by_length:
+			#Separate data out by length
+			lengths = {}
+			for d in all_data:
+				l = sum(d)
+				if l in lengths:
+					lengths[l][0] += l
+					lengths[l][1] += 1
+				else:
+					lengths[l] = [l,1]
+			# Pad our lengths just in case some lengths have no designs
+			errors_by_length=[]
+			for i in range(max(lengths.keys())):
+				if i not in lengths:
+					errors_by_length.append(float("NaN"))
+				else:
+					errors_by_length.append(lengths[i][0]/lengths[i][1])
+			#Calculate average error for each length
+			return errors,errors_by_length
+		else:
+			return errors
 
 
 	def inspection_test(self,metadata,override_query, sample_sizes = 10000, n_iter=1000):
