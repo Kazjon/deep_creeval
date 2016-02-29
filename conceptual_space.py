@@ -17,6 +17,8 @@ from spearmint.utils.parsing import parse_db_address
 
 from pylearn2.datasets.dense_design_matrix import DenseDesignMatrix
 from pylearn2.monitor import Monitor
+from pylearn2.expr.basic import log_sum_exp
+from pylearn2.space import VectorSpace
 
 from spearmint import main
 import numpy as np
@@ -28,6 +30,7 @@ import theano.tensor as T
 import theano
 import heapq
 import pymongo
+import pymc
 
 import pandas as pd
 from pandas.tools.plotting import radviz
@@ -1667,19 +1670,19 @@ class LSTMConceptualSpace(ConceptualSpace):
 
 
 class VAEConceptualSpace(ConceptualSpace):
-	fixed_hypers = {"batch_size": 1000,
+	fixed_hypers = {"batch_size": 250,
 					"monitoring_batch_size": 500,
 					"save_path": ".",
 					"yaml_path": "../../../../model_yamls/",
 					"layer_fn": "vae",
 					"num_layers": 1,
 					"n_folds": 5,
-	                #"nhid_mlp1": 200,
-	                #"nhid_mlp2": 200,
+	                "nhid_mlp1": 200,
+	                "nhid_mlp2": 200,
 	                "mom_max": 0.95,
 	                "mom_init": 0.0,
 	                "mom_fin": 0.95,
-	                "max_epochs": 25,
+	                "max_epochs": 1000,
 	                "learn_rate": 1e-4
 	}
 	hyper_space = { "nhid": [3, 5, 10, 20],
@@ -1713,8 +1716,24 @@ class VAEConceptualSpace(ConceptualSpace):
 		self._recon_return_noisy = theano.function([I4], recon_return_noisy, allow_input_downcast=True)
 
 		I5 = self.model.get_input_space().make_theano_batch(batch_size=hypers["batch_size"])
-		R = self.model.log_likelihood_approximation(I5, 20)
+		R = self.model.log_likelihood_approximation(I5, 100)
 		self._recon_cost = theano.function([I5],R, allow_input_downcast=True)
+
+		I6 = self.model.get_input_space().make_theano_batch(batch_size=hypers["batch_size"])
+		R = self.model.log_likelihood_lower_bound(I6, 100)
+		self._recon_cost_lowerbound = theano.function([I6],R, allow_input_downcast=True)
+
+		I7 = self.model.get_input_space().make_theano_batch(batch_size=hypers["batch_size"])
+		R = self.model.encode_phi(I7)
+		self._encode_phi = theano.function([I7],R, allow_input_downcast=True)
+
+		H = VectorSpace(dim=self.model.posterior.ndim*2).make_theano_batch(batch_size=hypers["batch_size"]) #Hack for DIagonalGaussian internal spaces with their messy CompositeSpace that reduces to a tuple
+		con_from_hidden = self.con_from_phi(H, False)
+		self._con_from_hidden = theano.function([H], con_from_hidden,  allow_input_downcast=True)
+
+		H2 = VectorSpace(dim=self.model.posterior.ndim*2).make_theano_batch(batch_size=hypers["batch_size"]) #Hack for DIagonalGaussian internal spaces with their messy CompositeSpace that reduces to a tuple
+		con_from_hidden_noisy = self.con_from_phi(H2, True)
+		self._con_from_hidden_noisy = theano.function([H2], con_from_hidden_noisy, allow_input_downcast=True)
 
 		R = self.model.sample(hypers["batch_size"], return_sample_means=False)
 		self._sample = theano.function([],R)
@@ -1727,12 +1746,25 @@ class VAEConceptualSpace(ConceptualSpace):
 		if not noisy_encoding:
 			epsilon *= 0
 		# Encode q(z | x) parameters
-		phi = self.model.encode_phi(X)
+		phi = self.model.encode_phi(X) #This is the raw output of the encoder network (which parameterises the hidden dists)
 		# Compute z
-		z = self.model.sample_from_q_z_given_x(epsilon=epsilon, phi=phi)
+		z = self.model.sample_from_q_z_given_x(epsilon=epsilon, phi=phi) # This is a list of samples from the distribution conditioned on the inputs
 		# Compute expectation term
-		theta = self.model.decode_theta(z)
+		theta = self.model.decode_theta(z) #This is the raw output of the decoder network (which parameterises the output dists) generated based on samples from the hidden dists.
 		reconstructed_X = self.model.sample_from_p_x_given_z(num_samples=X.shape[0], theta=theta)
+		return (reconstructed_X, self.model.means_from_theta(theta), epsilon, phi[0], phi[1], z, theta[0])
+
+
+	def con_from_phi(self, phi, noisy_encoding=False):
+		phi = (phi[0:self.model.nhid,:],phi[self.model.nhid:,:])
+		epsilon = self.model.sample_from_epsilon((phi[0].shape[0], self.model.nhid))
+		if not noisy_encoding:
+			epsilon *= 0
+		# Compute z
+		z = self.model.sample_from_q_z_given_x(epsilon=epsilon, phi=phi) # This is a list of samples from the distribution conditioned on the inputs
+		# Compute expectation term
+		theta = self.model.decode_theta(z) #This is the raw output of the decoder network (which parameterises the output dists) generated based on samples from the hidden dists.
+		reconstructed_X = self.model.sample_from_p_x_given_z(num_samples=phi[0].shape[0], theta=theta)
 		return (reconstructed_X, self.model.means_from_theta(theta), epsilon, phi[0], phi[1], z, theta[0])
 
 
@@ -1908,7 +1940,7 @@ class VAEConceptualSpace(ConceptualSpace):
 					print ".",
 				print
 
-	def get_dataset_errors(self, metadata, override_query = {}, return_averages_by_length=False):
+	def get_dataset_errors(self, metadata, override_query = {}, return_averages_by_length=False, return_hidden_rep_averages=False):
 		if len(override_query.keys()):
 			q = override_query
 		else:
@@ -1918,16 +1950,20 @@ class VAEConceptualSpace(ConceptualSpace):
 		all_data = np.vstack((train_data.X,test_data.X))
 		print "   --- Data loaded."
 		errors = self.recon_cost(all_data)
+		if return_hidden_rep_averages:
+			hidden_reps = self.represent(all_data)
+			hidden_rep_averages = {"mu": list(np.mean(hidden_reps,axis=0)),"sigma": list(np.std(hidden_reps,axis=0))}
+			print hidden_rep_averages
 		if return_averages_by_length:
 			#Separate data out by length
 			lengths = {}
-			for d in all_data:
+			for i,d in enumerate(all_data):
 				l = sum(d)
 				if l in lengths:
-					lengths[l][0] += l
+					lengths[l][0] += errors[i]
 					lengths[l][1] += 1
 				else:
-					lengths[l] = [l,1]
+					lengths[l] = [errors[i],1]
 			# Pad our lengths just in case some lengths have no designs
 			errors_by_length=[]
 			for i in range(max(lengths.keys())):
@@ -1935,10 +1971,16 @@ class VAEConceptualSpace(ConceptualSpace):
 					errors_by_length.append(float("NaN"))
 				else:
 					errors_by_length.append(lengths[i][0]/lengths[i][1])
-			#Calculate average error for each length
-			return errors,errors_by_length
+		if return_hidden_rep_averages:
+			if return_averages_by_length:
+				return errors,errors_by_length, hidden_rep_averages
+			else:
+				return errors, hidden_rep_averages
 		else:
-			return errors
+			if return_averages_by_length:
+				return errors,errors_by_length
+			else:
+				return errors
 
 
 	def inspection_test(self,metadata,override_query, sample_sizes = 10000, n_iter=1000):
@@ -2339,24 +2381,46 @@ class VAEConceptualSpace(ConceptualSpace):
 			design = self.design_vector_from_features(design)
 		recon = np.zeros(design.shape)
 		means = np.zeros(design.shape)
-		for i in range(design.shape[0]/self.fixed_hypers["batch_size"]):
-			d = design[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:]
+		for i in range(int(ceil(float(design.shape[0])/self.fixed_hypers["batch_size"]))):
+			d = design[i*self.fixed_hypers["batch_size"]:min(design.shape[0],(i+1)*self.fixed_hypers["batch_size"]),:]
 			if return_all:
 				if noisy_encoding:
-					recon[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:], means[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:] = self._recon_return_noisy(np.atleast_2d(d))
-				recon[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:], means[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:] =  self._recon_return(np.atleast_2d(d))
+					recon[i*self.fixed_hypers["batch_size"]:i*self.fixed_hypers["batch_size"]+d.shape[0],:], means[i*self.fixed_hypers["batch_size"]:i*self.fixed_hypers["batch_size"]+d.shape[0],:] = self._recon_return_noisy(np.atleast_2d(d))
+				recon[i*self.fixed_hypers["batch_size"]:i*self.fixed_hypers["batch_size"]+d.shape[0],:], means[i*self.fixed_hypers["batch_size"]:i*self.fixed_hypers["batch_size"]+d.shape[0],:] =  self._recon_return(np.atleast_2d(d))
 			if noisy_encoding:
-				recon[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:], means[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:] =  self._recon_noisy(np.atleast_2d(d))
-			recon[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:], means[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:] =  self._recon(np.atleast_2d(d))
+				recon[i*self.fixed_hypers["batch_size"]:i*self.fixed_hypers["batch_size"]+d.shape[0],:], means[i*self.fixed_hypers["batch_size"]:i*self.fixed_hypers["batch_size"]+d.shape[0],:] =  self._recon_noisy(np.atleast_2d(d))
+			recon[i*self.fixed_hypers["batch_size"]:i*self.fixed_hypers["batch_size"]+d.shape[0],:], means[i*self.fixed_hypers["batch_size"]:i*self.fixed_hypers["batch_size"]+d.shape[0],:] =  self._recon(np.atleast_2d(d))
 		return recon,means
 
-	def recon_cost(self, design):
+	def represent(self, designs):
+		hidden = np.zeros([designs.shape[0],self.model.nhid*2])
+		for i in range(int(ceil(float(designs.shape[0])/self.fixed_hypers["batch_size"]))):
+			d = designs[i*self.fixed_hypers["batch_size"]:min(designs.shape[0],(i+1)*self.fixed_hypers["batch_size"]),:]
+			reps = self._encode_phi(d)
+			reps[1] = np.exp(reps[1])
+			hidden[i*self.fixed_hypers["batch_size"]:i*self.fixed_hypers["batch_size"]+d.shape[0],:] = np.hstack(reps)
+		return hidden
+
+	def construct_from_hidden(self, hidden_reps, noisy_encoding=False):
+		recon = np.zeros([hidden_reps.shape[0],self.model.nvis])
+		means = np.zeros([hidden_reps.shape[0],self.model.nvis])
+		for i in range(int(ceil(float(hidden_reps.shape[0])/self.fixed_hypers["batch_size"]))):
+			d = hidden_reps[i*self.fixed_hypers["batch_size"]:min(hidden_reps.shape[0],(i+1)*self.fixed_hypers["batch_size"]),:]
+			if noisy_encoding:
+				recon[i*self.fixed_hypers["batch_size"]::i*self.fixed_hypers["batch_size"]+d.shape[0],:], means[i*self.fixed_hypers["batch_size"]:i*self.fixed_hypers["batch_size"]+d.shape[0],:] = self._con_from_hidden_noisy(np.atleast_2d(d))[:2]
+			recon[i*self.fixed_hypers["batch_size"]:i*self.fixed_hypers["batch_size"]+d.shape[0],:], means[i*self.fixed_hypers["batch_size"]:i*self.fixed_hypers["batch_size"]+d.shape[0],:] = self._con_from_hidden(np.atleast_2d(d))[:2]
+		return recon,means
+
+	def recon_cost(self, design, use_lower_bound=False):
 		if type(design) is dict:
 			design = np.atleast_2d(self.design_vector_from_features(design))
 		batch_result_list = []
 		for i in range(int(ceil(float(design.shape[0])/self.fixed_hypers["batch_size"]))):
 			d = design[i*self.fixed_hypers["batch_size"]:min((i+1)*self.fixed_hypers["batch_size"],design.shape[0]),:]
-			costs = self._recon_cost(np.atleast_2d(d))
+			if use_lower_bound:
+				costs = self._recon_cost_lowerbound(np.atleast_2d(d))
+			else:
+				costs = self._recon_cost(np.atleast_2d(d))
 			batch_result_list.append(costs)
 		return np.concatenate(batch_result_list)
 
@@ -2395,6 +2459,12 @@ class VAEConceptualSpace(ConceptualSpace):
 		feature_list = self.metadata["fields_x"]
 		return dict(zip(feature_list,np.ravel(design)))
 
+	def positive_features_from_design_vector(self, design):
+		design = self.features_from_design_vector(design)
+		for f in design.keys():
+			if not design[f]:
+				del design[f]
+		return design
 
 	def binarise_features(self, features, threshold=0):
 		new = []
@@ -2458,8 +2528,8 @@ class VAEConceptualSpace(ConceptualSpace):
 		self.sampled_designs = np.zeros((self.metadata["surprise_samples"],len(self.metadata["fields_x"])))
 
 		print "-- Generating samples:"
-		for i in range(self.metadata["surprise_samples"]/self.fixed_hypers["batch_size"]):
-			self.sampled_designs[i*self.fixed_hypers["batch_size"]:(i+1)*self.fixed_hypers["batch_size"],:] = self._sample()
+		for i in range(int(ceil(float(self.metadata["surprise_samples"])/self.fixed_hypers["batch_size"]))):
+			self.sampled_designs[i*self.fixed_hypers["batch_size"]:min(self.metadata["surprise_samples"],(i+1)*self.fixed_hypers["batch_size"]),:] = self._sample()
 		self.sample_means = np.array(self.sampled_designs).mean(axis=0)
 		print "-- Sampling complete."
 
@@ -2618,8 +2688,8 @@ class VAEConceptualSpace(ConceptualSpace):
 		ConceptualSpace.__init__(self, domain_name, self.hyper_space, self.fixed_hypers, scratch_path = scratch_path,selected_hypers=selected_hypers)
 
 class DBNConceptualSpace(ConceptualSpace): # INCOMPLETE -- LARGELY A COPY OF THE VAE CLASS
-	fixed_hypers = {"batch_size": 500,
-					"monitoring_batch_size": 500,
+	fixed_hypers = {"batch_size": 250,
+					"monitoring_batch_size": 250,
 					"max_epochs": 10,
 					"save_path": ".",
 					"yaml_path": "../../../../model_yamls/",

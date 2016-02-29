@@ -67,12 +67,14 @@ class MCTSDesignSpace(object):
 		# game history.  If the design is complete, return its score.
 		# Otherwise return -1.
 		if self.end_token in state_history[-1]:
+			cur_state = state_history[-1].clone()
+			cur_state.remove(self.end_token)
 			if self.score_method == "plausibility":
-				return plausibility_score(state_history[-1], self.model, self.plausibility_dist, self.weight_plaus_by_length, self.errors_by_length)
+				return plausibility_score(cur_state, self.model, self.plausibility_dist, self.weight_plaus_by_length, self.errors_by_length)
 			if self.score_method == "surprise":
-				return surprise_score(state_history[-1], self.model, self.end_token, self.surprise_dist, self.surprise_depth)
+				return surprise_score(cur_state, self.model, self.end_token, self.surprise_dist, self.surprise_depth)
 			if self.score_method == "plausibility+surprise":
 				plaus = plausibility_score(state_history[-1], self.model, self.plausibility_dist, self.weight_plaus_by_length, self.errors_by_length)
-				surp = surprise_score(state_history[-1], self.model, self.end_token, self.surprise_dist, self.surprise_depth)
+				surp = surprise_score(cur_state, self.model, self.end_token, self.surprise_dist, self.surprise_depth)
 				return (plaus + surp)/2.0
 		return -1
